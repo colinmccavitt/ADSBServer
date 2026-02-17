@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ADS-B Tracker - 3D View</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/cesium-style.css" />
+</head>
+<body>
+    <div id="cesiumContainer"></div>
+
+    <div id="toolbar">
+        <a href="/" id="switch-2d" title="Switch to 2D Map View">2D Map</a>
+        <button id="btn-home" title="Reset Camera">Home</button>
+        <button id="btn-follow" class="inactive" title="Follow Selected Aircraft">Follow</button>
+        <button id="btn-buildings" title="Toggle 3D Buildings">Buildings</button>
+        <button id="btn-labels" title="Toggle Aircraft Labels">Labels</button>
+        <button id="btn-trails" title="Toggle Flight Trails">Trails</button>
+        <button id="btn-night" title="Toggle Day/Night Lighting">Lighting</button>
+    </div>
+
+    <div id="sidebar">
+        <div id="sidebar-header">
+            <div id="sidebar-title-row">
+                <h1>ADS-B 3D Tracker</h1>
+                <button id="config-toggle" title="Settings">&#9881;</button>
+            </div>
+            <div id="stats">
+                <span id="stat-aircraft">0 aircraft</span>
+                <span id="stat-msgs">0 msg/s</span>
+                <span id="stat-total">0 msgs</span>
+                <span id="stat-status" class="status-disconnected">Connecting...</span>
+            </div>
+        </div>
+
+        <div id="config-panel" class="config-hidden">
+            <div class="config-section-title">Receiver Settings</div>
+            <div class="config-row">
+                <label for="cfg-lat">Latitude</label>
+                <input type="number" id="cfg-lat" step="0.000001" placeholder="38.855964" />
+            </div>
+            <div class="config-row">
+                <label for="cfg-lon">Longitude</label>
+                <input type="number" id="cfg-lon" step="0.000001" placeholder="-77.049517" />
+            </div>
+            <div class="config-row">
+                <label for="cfg-gain">Gain (dB)</label>
+                <select id="cfg-gain"></select>
+            </div>
+            <div class="config-actions">
+                <button id="cfg-save">Apply</button>
+                <button id="cfg-autogain">Auto Gain</button>
+                <span id="cfg-status"></span>
+            </div>
+        </div>
+
+        <div id="aircraft-list"></div>
+    </div>
+
+    <div id="detail-panel" class="hidden">
+        <button id="detail-close">&times;</button>
+        <h2 id="detail-callsign">---</h2>
+        <div class="detail-icao" id="detail-icao"></div>
+
+        <div class="detail-section-title" id="detail-info-title" style="display:none">Aircraft Info</div>
+        <div class="detail-grid" id="detail-info-grid" style="display:none">
+            <div class="detail-item">
+                <div class="detail-label">Registration</div>
+                <div class="detail-value" id="detail-reg">---</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Type</div>
+                <div class="detail-value" id="detail-type">---</div>
+            </div>
+            <div class="detail-item detail-item-wide">
+                <div class="detail-label">Model</div>
+                <div class="detail-value" id="detail-model">---</div>
+            </div>
+            <div class="detail-item detail-item-wide">
+                <div class="detail-label">Operator</div>
+                <div class="detail-value" id="detail-operator">---</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Manufacturer</div>
+                <div class="detail-value" id="detail-manufacturer">---</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Year Built</div>
+                <div class="detail-value" id="detail-year">---</div>
+            </div>
+        </div>
+
+        <div class="detail-section-title">Flight Data</div>
+        <div class="detail-grid">
+            <div class="detail-item">
+                <div class="detail-label">Altitude</div>
+                <div class="detail-value" id="detail-alt">---</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Speed</div>
+                <div class="detail-value" id="detail-speed">---</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Heading</div>
+                <div class="detail-value" id="detail-heading">---</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Vert. Rate</div>
+                <div class="detail-value" id="detail-vrate">---</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Squawk</div>
+                <div class="detail-value" id="detail-squawk">---</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">On Ground</div>
+                <div class="detail-value" id="detail-ground">---</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Messages</div>
+                <div class="detail-value" id="detail-msgs">---</div>
+            </div>
+            <div class="detail-item">
+                <div class="detail-label">Last Seen</div>
+                <div class="detail-value" id="detail-lastseen">---</div>
+            </div>
+        </div>
+
+        <div class="detail-actions">
+            <button id="detail-flyto">Fly To</button>
+            <button id="detail-track">Track Camera</button>
+        </div>
+    </div>
+
+    <div id="altitude-legend">
+        <div class="legend-title">Altitude</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#34d399"></span>Ground</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#22d3ee"></span>&lt; 5,000 ft</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#fbbf24"></span>&lt; 15,000 ft</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#f97316"></span>&lt; 30,000 ft</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#ef4444"></span>&ge; 30,000 ft</div>
+    </div>
+
+    <script type="module" src="/static/cesium-app.js"></script>
+</body>
+</html>

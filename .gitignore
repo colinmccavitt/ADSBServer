@@ -1,0 +1,5 @@
+venv/
+__pycache__/
+*.pyc
+data/basic-ac-db.json.gz
+.env

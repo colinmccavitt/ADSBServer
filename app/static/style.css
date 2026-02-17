@@ -1,0 +1,697 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+    background: #0a0e17;
+    color: #e0e6ed;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+}
+
+#map {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 320px;
+    bottom: 0;
+    z-index: 1;
+}
+
+/* --- Sidebar --- */
+#sidebar {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 320px;
+    height: 100vh;
+    background: #111827;
+    border-left: 1px solid #1e293b;
+    display: flex;
+    flex-direction: column;
+    z-index: 10;
+}
+
+#sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid #1e293b;
+    flex-shrink: 0;
+}
+
+#sidebar-header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #f1f5f9;
+    margin-bottom: 8px;
+}
+
+#stats {
+    display: flex;
+    gap: 10px;
+    font-size: 12px;
+    color: #94a3b8;
+    flex-wrap: wrap;
+}
+
+#stats span {
+    background: #1e293b;
+    padding: 3px 8px;
+    border-radius: 4px;
+}
+
+.status-connected {
+    color: #34d399 !important;
+    background: #064e3b !important;
+}
+
+.status-disconnected {
+    color: #f87171 !important;
+    background: #7f1d1d !important;
+}
+
+/* --- Config Panel --- */
+#sidebar-title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#config-toggle {
+    background: none;
+    border: 1px solid #334155;
+    border-radius: 5px;
+    color: #94a3b8;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 2px 7px;
+    line-height: 1.2;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+#config-toggle:hover {
+    color: #f1f5f9;
+    border-color: #64748b;
+}
+
+#config-toggle.active {
+    color: #3b82f6;
+    border-color: #3b82f6;
+}
+
+#config-panel {
+    padding: 12px 16px;
+    border-bottom: 1px solid #1e293b;
+    flex-shrink: 0;
+    overflow-y: auto;
+    transition: max-height 0.25s ease, opacity 0.2s ease, padding 0.25s ease;
+    max-height: 600px;
+    opacity: 1;
+}
+
+#config-panel.config-hidden {
+    max-height: 0;
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.config-section-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #64748b;
+    margin-bottom: 10px;
+    font-weight: 600;
+}
+
+.config-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.config-row label {
+    font-size: 13px;
+    color: #cbd5e1;
+    flex-shrink: 0;
+    width: 80px;
+}
+
+.config-row input,
+.config-row select {
+    flex: 1;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 5px;
+    color: #e2e8f0;
+    font-size: 13px;
+    padding: 5px 8px;
+    font-family: "Consolas", "Monaco", monospace;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.config-row input:focus,
+.config-row select:focus {
+    border-color: #3b82f6;
+}
+
+.config-row select {
+    cursor: pointer;
+    appearance: auto;
+}
+
+.config-row select option {
+    background: #1e293b;
+    color: #e2e8f0;
+}
+
+.config-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+}
+
+#cfg-save, #cfg-autogain {
+    background: #3b82f6;
+    border: none;
+    border-radius: 5px;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 16px;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+}
+
+#cfg-save:hover, #cfg-autogain:hover {
+    background: #2563eb;
+}
+
+#cfg-save:active, #cfg-autogain:active {
+    background: #1d4ed8;
+}
+
+#cfg-autogain {
+    background: #6366f1;
+}
+
+#cfg-autogain:hover {
+    background: #4f46e5;
+}
+
+#cfg-autogain:disabled, #cfg-save:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#cfg-status {
+    font-size: 12px;
+    color: #94a3b8;
+}
+
+#cfg-status.success {
+    color: #34d399;
+}
+
+#cfg-status.error {
+    color: #f87171;
+}
+
+/* --- Auto Gain Results --- */
+#autogain-results {
+    margin-top: 10px;
+    transition: max-height 0.3s ease, opacity 0.2s ease;
+    max-height: 400px;
+    opacity: 1;
+    overflow: hidden;
+}
+
+#autogain-results.autogain-hidden {
+    max-height: 0;
+    opacity: 0;
+    margin-top: 0;
+}
+
+.autogain-progress {
+    font-size: 12px;
+    color: #94a3b8;
+    margin-bottom: 8px;
+}
+
+.autogain-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+    font-size: 11px;
+    font-family: "Consolas", "Monaco", monospace;
+}
+
+.autogain-bar-label {
+    width: 50px;
+    text-align: right;
+    color: #94a3b8;
+    flex-shrink: 0;
+}
+
+.autogain-bar-track {
+    flex: 1;
+    height: 14px;
+    background: #1e293b;
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+}
+
+.autogain-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+    background: #3b82f6;
+}
+
+.autogain-bar-fill.best {
+    background: #34d399;
+}
+
+.autogain-bar-fill.testing {
+    background: #fbbf24;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.autogain-bar-value {
+    width: 55px;
+    color: #cbd5e1;
+    flex-shrink: 0;
+}
+
+.autogain-bar-value.best {
+    color: #34d399;
+    font-weight: 600;
+}
+
+#aircraft-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+}
+
+.ac-item {
+    background: #1e293b;
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.ac-item:hover {
+    background: #334155;
+}
+
+.ac-item.selected {
+    background: #1e3a5f;
+    border: 1px solid #3b82f6;
+}
+
+.ac-item-left {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.ac-callsign {
+    font-weight: 600;
+    font-size: 14px;
+    color: #f1f5f9;
+}
+
+.ac-icao {
+    font-size: 11px;
+    color: #64748b;
+    font-family: "Consolas", "Monaco", monospace;
+}
+
+.ac-item-right {
+    text-align: right;
+    font-size: 12px;
+    color: #94a3b8;
+}
+
+.ac-alt {
+    font-weight: 500;
+    color: #e2e8f0;
+}
+
+/* --- Detail Panel --- */
+#detail-panel {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    width: 360px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    background: #111827ee;
+    backdrop-filter: blur(12px);
+    border: 1px solid #1e293b;
+    border-radius: 10px;
+    padding: 20px;
+    z-index: 100;
+}
+
+#detail-panel.hidden {
+    display: none;
+}
+
+#detail-close {
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 22px;
+    cursor: pointer;
+    padding: 4px;
+    line-height: 1;
+}
+
+#detail-close:hover {
+    color: #f1f5f9;
+}
+
+#detail-callsign {
+    font-size: 22px;
+    font-weight: 700;
+    color: #f1f5f9;
+}
+
+.detail-icao {
+    font-size: 12px;
+    color: #64748b;
+    font-family: "Consolas", "Monaco", monospace;
+    margin-bottom: 14px;
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.detail-item {
+    background: #1e293b;
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+
+.detail-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #64748b;
+    margin-bottom: 2px;
+}
+
+.detail-value {
+    font-size: 15px;
+    font-weight: 600;
+    color: #e2e8f0;
+}
+
+/* --- Detail section titles --- */
+.detail-section-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #64748b;
+    margin: 12px 0 6px 0;
+    font-weight: 600;
+}
+
+.detail-section-title:first-of-type {
+    margin-top: 0;
+}
+
+.detail-item-wide {
+    grid-column: 1 / -1;
+}
+
+/* --- DB Status --- */
+.db-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #cbd5e1;
+}
+
+.db-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.db-indicator.db-fresh {
+    background: #34d399;
+}
+
+.db-indicator.db-warn {
+    background: #fbbf24;
+}
+
+.db-indicator.db-stale {
+    background: #f87171;
+}
+
+#db-refresh-btn {
+    background: #6366f1;
+    border: none;
+    border-radius: 5px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 12px;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+}
+
+#db-refresh-btn:hover {
+    background: #4f46e5;
+}
+
+#db-refresh-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#db-refresh-status {
+    font-size: 12px;
+    color: #94a3b8;
+}
+
+#db-refresh-status.success {
+    color: #34d399;
+}
+
+#db-refresh-status.error {
+    color: #f87171;
+}
+
+/* --- Aircraft map labels --- */
+.aircraft-label {
+    background: #111827cc;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #e2e8f0;
+    white-space: nowrap;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* --- Scrollbar --- */
+#detail-panel::-webkit-scrollbar {
+    width: 6px;
+}
+
+#detail-panel::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#detail-panel::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 3px;
+}
+
+#aircraft-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+#aircraft-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#aircraft-list::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 3px;
+}
+
+/* --- Collectors Panel --- */
+#collectors-toggle {
+    background: none;
+    border: 1px solid #334155;
+    border-radius: 5px;
+    color: #94a3b8;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 2px 7px;
+    line-height: 1.2;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+#collectors-toggle:hover {
+    color: #f1f5f9;
+    border-color: #64748b;
+}
+
+#collectors-toggle.active {
+    color: #f59e0b;
+    border-color: #f59e0b;
+}
+
+#collectors-panel {
+    padding: 12px 16px;
+    border-bottom: 1px solid #1e293b;
+    flex-shrink: 0;
+    overflow-y: auto;
+    transition: max-height 0.25s ease, opacity 0.2s ease, padding 0.25s ease;
+    max-height: 300px;
+    opacity: 1;
+}
+
+#collectors-panel.collectors-hidden {
+    max-height: 0;
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.collectors-empty {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.collector-item {
+    background: #1e293b;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.collector-item-left {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.collector-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: #f59e0b;
+}
+
+.collector-id {
+    font-size: 10px;
+    color: #64748b;
+    font-family: "Consolas", "Monaco", monospace;
+}
+
+.collector-item-right {
+    text-align: right;
+    font-size: 11px;
+    color: #94a3b8;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+}
+
+.collector-health {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-top: 2px;
+}
+
+.collector-healthy {
+    background: #34d399;
+}
+
+.collector-stale {
+    background: #f87171;
+}
+
+.collector-unknown {
+    background: #64748b;
+}
+
+.collector-tooltip {
+    background: #1e293b !important;
+    border: 1px solid #f59e0b !important;
+    color: #f59e0b !important;
+    font-weight: 600;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    box-shadow: none;
+}
+
+.collector-tooltip::before {
+    border-top-color: #f59e0b !important;
+}
+
+/* --- Responsive --- */
+@media (max-width: 768px) {
+    #sidebar {
+        width: 100%;
+        height: 40vh;
+        top: auto;
+        bottom: 0;
+        border-left: none;
+        border-top: 1px solid #1e293b;
+    }
+
+    #map {
+        right: 0;
+        bottom: 40vh;
+    }
+
+    #detail-panel {
+        width: calc(100% - 40px);
+        bottom: calc(40vh + 10px);
+    }
+}

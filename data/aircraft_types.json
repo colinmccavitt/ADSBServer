@@ -1,0 +1,703 @@
+{
+  "description": "Unique aircraft types and models detected by this ADS-B receiver",
+  "updated_at": "2026-02-17T05:01:40.391750+00:00",
+  "unique_type_count": 59,
+  "types": [
+    {
+      "icao_type": "A21N",
+      "model": null,
+      "manufacturer": null,
+      "airlines": [],
+      "is_military": false,
+      "first_seen": "2026-02-17T01:38:34.248629+00:00",
+      "last_seen": "2026-02-17T01:38:34.248629+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "A320",
+      "model": "Airbus A320-214",
+      "manufacturer": null,
+      "airlines": [],
+      "is_military": false,
+      "first_seen": "2026-02-17T04:28:09.456568+00:00",
+      "last_seen": "2026-02-17T04:28:09.456579+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B38M",
+      "model": null,
+      "manufacturer": null,
+      "airlines": [],
+      "is_military": false,
+      "first_seen": "2026-02-17T04:50:19.085289+00:00",
+      "last_seen": "2026-02-17T04:50:19.085301+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B38M",
+      "model": "Boeing 737MAX 8",
+      "manufacturer": null,
+      "airlines": [],
+      "is_military": false,
+      "first_seen": "2026-02-17T02:35:19.146839+00:00",
+      "last_seen": "2026-02-17T02:35:19.146839+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "C17",
+      "model": "Boeing C-17A Globemaster III",
+      "manufacturer": null,
+      "airlines": [],
+      "is_military": true,
+      "first_seen": "2026-02-17T01:56:33.485357+00:00",
+      "last_seen": "2026-02-17T01:56:33.485357+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "F70",
+      "model": null,
+      "manufacturer": null,
+      "airlines": [],
+      "is_military": false,
+      "first_seen": "2026-02-17T04:28:08.305352+00:00",
+      "last_seen": "2026-02-17T04:28:08.305363+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "GLF5",
+      "model": "Gulfstream Aerospace C-37A",
+      "manufacturer": null,
+      "airlines": [],
+      "is_military": true,
+      "first_seen": "2026-02-17T03:52:44.203165+00:00",
+      "last_seen": "2026-02-17T03:52:44.203165+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "A20N",
+      "model": "A320-251N",
+      "manufacturer": "AIRBUS",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:34:32.004064+00:00",
+      "last_seen": "2026-02-17T03:47:31.919051+00:00",
+      "times_seen": 4,
+      "airlines": [
+        "BANK OF UTAH TRUSTEE"
+      ]
+    },
+    {
+      "icao_type": "A21N",
+      "model": "A321-253NX",
+      "manufacturer": "AIRBUS",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:22:19.498547+00:00",
+      "last_seen": "2026-02-17T03:54:00.882676+00:00",
+      "times_seen": 4,
+      "airlines": [
+        "AMERICAN AIRLINES INC",
+        "BANK OF UTAH TRUSTEE"
+      ]
+    },
+    {
+      "icao_type": "A21N",
+      "model": "A321-271NX",
+      "manufacturer": "AIRBUS",
+      "airlines": [
+        "BANK OF UTAH TRUSTEE"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T02:20:51.709556+00:00",
+      "last_seen": "2026-02-17T03:34:05.449374+00:00",
+      "times_seen": 2
+    },
+    {
+      "icao_type": "A21N",
+      "model": "A321neo",
+      "manufacturer": "AIRBUS",
+      "airlines": [
+        "UMB BANK NA TRUSTEE"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T03:27:29.408736+00:00",
+      "last_seen": "2026-02-17T03:27:29.408736+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "A321",
+      "model": "A321-211",
+      "manufacturer": "AIRBUS",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:31:05.559981+00:00",
+      "last_seen": "2026-02-17T02:17:06.332103+00:00",
+      "times_seen": 4,
+      "airlines": [
+        "DELTA AIR LINES INC",
+        "UMB BANK NA TRUSTEE"
+      ]
+    },
+    {
+      "icao_type": "A321",
+      "model": "A321-231",
+      "manufacturer": "AIRBUS",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:15:56.107833+00:00",
+      "last_seen": "2026-02-17T03:21:40.019656+00:00",
+      "times_seen": 8,
+      "airlines": [
+        "JETBLUE AIRWAYS CORP",
+        "BANK OF UTAH TRUSTEE"
+      ]
+    },
+    {
+      "icao_type": "A339",
+      "model": "A330-900",
+      "manufacturer": "AIRBUS",
+      "airlines": [
+        "DELTA AIR LINES INC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T03:27:22.282232+00:00",
+      "last_seen": "2026-02-17T03:29:54.571277+00:00",
+      "times_seen": 3
+    },
+    {
+      "icao_type": "BCS3",
+      "model": "BD-500-1A11",
+      "manufacturer": "AIRBUS CANADA LP",
+      "airlines": [
+        "JETBLUE AIRWAYS CORP"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T01:56:28.964228+00:00",
+      "last_seen": "2026-02-17T04:56:52.728830+00:00",
+      "times_seen": 6
+    },
+    {
+      "icao_type": "A319",
+      "model": "A319-112",
+      "manufacturer": "AIRBUS INDUSTRIE",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:13:04.862600+00:00",
+      "last_seen": "2026-02-17T04:37:56.368580+00:00",
+      "times_seen": 28,
+      "airlines": [
+        "AMERICAN AIRLINES INC",
+        "WELLS FARGO TRUST CO NA TRUSTEE",
+        "BANK OF UTAH TRUSTEE",
+        "UMB BANK NA TRUSTEE",
+        "UMB BANK N A TRUSTEE"
+      ]
+    },
+    {
+      "icao_type": "A319",
+      "model": "A319-131",
+      "manufacturer": "AIRBUS INDUSTRIE",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:13:20.523859+00:00",
+      "last_seen": "2026-02-17T01:36:10.068037+00:00",
+      "times_seen": 3,
+      "airlines": [
+        "UNITED AIRLINES INC"
+      ]
+    },
+    {
+      "icao_type": "A319",
+      "model": "A319-132",
+      "manufacturer": "AIRBUS INDUSTRIE",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:13:40.382574+00:00",
+      "last_seen": "2026-02-17T04:44:09.965083+00:00",
+      "times_seen": 22,
+      "airlines": [
+        "U S BANK NA TRUSTEE",
+        "US BANK NA TRUSTEE"
+      ]
+    },
+    {
+      "icao_type": "A320",
+      "model": "A320-212",
+      "manufacturer": "AIRBUS INDUSTRIE",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:15:24.257395+00:00",
+      "last_seen": "2026-02-17T03:52:47.475018+00:00",
+      "times_seen": 3,
+      "airlines": [
+        "DELTA AIR LINES INC"
+      ]
+    },
+    {
+      "icao_type": "A320",
+      "model": "A320-214",
+      "manufacturer": "AIRBUS INDUSTRIE",
+      "airlines": [
+        "UMB BANK NA TRUSTEE"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T01:48:16.523781+00:00",
+      "last_seen": "2026-02-17T01:53:24.273899+00:00",
+      "times_seen": 3
+    },
+    {
+      "icao_type": "A320",
+      "model": "A320-232",
+      "manufacturer": "AIRBUS INDUSTRIE",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:24:01.277111+00:00",
+      "last_seen": "2026-02-17T02:37:31.270978+00:00",
+      "times_seen": 9,
+      "airlines": [
+        "JETBLUE AIRWAYS CORP",
+        "BANK OF UTAH TRUSTEE"
+      ]
+    },
+    {
+      "icao_type": "L2J",
+      "model": "A321-253NX",
+      "manufacturer": "AIRBUS S A S",
+      "airlines": [
+        "AMERICAN AIRLINES INC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T03:37:26.356458+00:00",
+      "last_seen": "2026-02-17T03:40:28.748455+00:00",
+      "times_seen": 2
+    },
+    {
+      "icao_type": "B412",
+      "model": "412EP",
+      "manufacturer": "BELL",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:33:05.361944+00:00",
+      "last_seen": "2026-02-17T03:20:17.243838+00:00",
+      "times_seen": 6,
+      "airlines": [
+        "DEPARTMENT OF INTERIOR, OFFICE OF AVIATION SERVICES"
+      ]
+    },
+    {
+      "icao_type": "B38M",
+      "model": "737 MAX 8",
+      "manufacturer": "BOEING",
+      "airlines": [
+        "ALLEGIANT AIR LLC",
+        "SOUTHWEST AIRLINES CO"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T02:01:08.107145+00:00",
+      "last_seen": "2026-02-17T03:54:11.426900+00:00",
+      "times_seen": 4
+    },
+    {
+      "icao_type": "B38M",
+      "model": "737-8",
+      "manufacturer": "BOEING",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:13:27.406324+00:00",
+      "last_seen": "2026-02-17T04:55:31.188989+00:00",
+      "times_seen": 18,
+      "airlines": [
+        "SOUTHWEST AIRLINES CO",
+        "UNITED AIRLINES INC",
+        "AMERICAN AIRLINES INC"
+      ]
+    },
+    {
+      "icao_type": "B39M",
+      "model": "737-9",
+      "manufacturer": "BOEING",
+      "airlines": [
+        "WILMINGTON TRUST CO TRUSTEE"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T02:10:24.909277+00:00",
+      "last_seen": "2026-02-17T02:10:24.909277+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B737",
+      "model": "737-724",
+      "manufacturer": "BOEING",
+      "airlines": [
+        "UNITED AIRLINES INC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T01:55:18.900150+00:00",
+      "last_seen": "2026-02-17T01:55:18.900150+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B737",
+      "model": "737-73V",
+      "manufacturer": "BOEING",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:30:09.984857+00:00",
+      "last_seen": "2026-02-17T01:30:09.984857+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B737",
+      "model": "737-79P",
+      "manufacturer": "BOEING",
+      "airlines": [
+        "SOUTHWEST AIRLINES CO"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T01:41:55.631666+00:00",
+      "last_seen": "2026-02-17T01:41:55.631666+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B737",
+      "model": "737-7H4",
+      "manufacturer": "BOEING",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:23:12.779053+00:00",
+      "last_seen": "2026-02-17T03:27:34.977984+00:00",
+      "times_seen": 7,
+      "airlines": [
+        "SOUTHWEST AIRLINES CO"
+      ]
+    },
+    {
+      "icao_type": "B738",
+      "model": "737-800",
+      "manufacturer": "BOEING",
+      "airlines": [
+        "SOUTHWEST AIRLINES CO"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T03:46:56.462627+00:00",
+      "last_seen": "2026-02-17T03:46:56.462627+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B738",
+      "model": "737-823",
+      "manufacturer": "BOEING",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:13:44.511273+00:00",
+      "last_seen": "2026-02-17T05:00:53.049146+00:00",
+      "times_seen": 32,
+      "airlines": [
+        "WILMINGTON TRUST CO TRUSTEE",
+        "BANK OF UTAH TRUSTEE",
+        "AMERICAN AIRLINES INC"
+      ]
+    },
+    {
+      "icao_type": "B738",
+      "model": "737-86N",
+      "manufacturer": "BOEING",
+      "airlines": [
+        "BANK OF UTAH TRUSTEE"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T02:07:28.681503+00:00",
+      "last_seen": "2026-02-17T02:07:28.681503+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B738",
+      "model": "737-890",
+      "manufacturer": "BOEING",
+      "airlines": [
+        "ALASKA AIRLINES INC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T02:25:28.154701+00:00",
+      "last_seen": "2026-02-17T02:25:28.154701+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B738",
+      "model": "737-8H4",
+      "manufacturer": "BOEING",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:19:23.530958+00:00",
+      "last_seen": "2026-02-17T01:48:49.362189+00:00",
+      "times_seen": 3,
+      "airlines": [
+        "SOUTHWEST AIRLINES CO"
+      ]
+    },
+    {
+      "icao_type": "B739",
+      "model": "737-900ER",
+      "manufacturer": "BOEING",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:17:59.512979+00:00",
+      "last_seen": "2026-02-17T01:17:59.512979+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B739",
+      "model": "737-924ER",
+      "manufacturer": "BOEING",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:13:20.654866+00:00",
+      "last_seen": "2026-02-17T04:45:43.224607+00:00",
+      "times_seen": 6,
+      "airlines": [
+        "UNITED AIRLINES INC"
+      ]
+    },
+    {
+      "icao_type": "B763",
+      "model": "767-381",
+      "manufacturer": "BOEING",
+      "airlines": [
+        "CARGO AIRCRAFT MANAGEMENT INC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T01:55:58.680956+00:00",
+      "last_seen": "2026-02-17T01:55:58.680956+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B764",
+      "model": "767-424ER",
+      "manufacturer": "BOEING",
+      "airlines": [
+        "UNITED AIRLINES INC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T03:50:51.415424+00:00",
+      "last_seen": "2026-02-17T03:50:51.415424+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "B788",
+      "model": "787-8",
+      "manufacturer": "BOEING",
+      "airlines": [
+        "AMERICAN AIRLINES INC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T02:06:30.678230+00:00",
+      "last_seen": "2026-02-17T02:06:30.678230+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "L2J",
+      "model": "737-8",
+      "manufacturer": "BOEING",
+      "airlines": [
+        "SOUTHWEST AIRLINES CO",
+        "UNITED AIRLINES INC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T01:54:16.705467+00:00",
+      "last_seen": "2026-02-17T02:02:12.988348+00:00",
+      "times_seen": 2
+    },
+    {
+      "icao_type": "CRJ9",
+      "model": "Regional Jet CRJ-900",
+      "manufacturer": "BOMBARDIER",
+      "airlines": [
+        "JAZZ AVIATION LP"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T01:50:28.228402+00:00",
+      "last_seen": "2026-02-17T01:57:14.964375+00:00",
+      "times_seen": 3
+    },
+    {
+      "icao_type": "CRJ7",
+      "model": "CL-600-2C10",
+      "manufacturer": "BOMBARDIER INC",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:13:07.679139+00:00",
+      "last_seen": "2026-02-17T04:59:31.569882+00:00",
+      "times_seen": 104,
+      "airlines": [
+        "AMERICAN AIRLINES INC",
+        "DOUGHERTY AIR TRUSTEE LLC TRUSTEE"
+      ]
+    },
+    {
+      "icao_type": "CRJ7",
+      "model": "CL-600-2C11",
+      "manufacturer": "BOMBARDIER INC",
+      "airlines": [
+        "UNITED AIRLINES INC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T03:21:56.206979+00:00",
+      "last_seen": "2026-02-17T04:45:35.296406+00:00",
+      "times_seen": 5
+    },
+    {
+      "icao_type": "CRJ9",
+      "model": "CL-600-2D24",
+      "manufacturer": "BOMBARDIER INC",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:20:56.855725+00:00",
+      "last_seen": "2026-02-17T05:01:10.932945+00:00",
+      "times_seen": 42,
+      "airlines": [
+        "AMERICAN AIRLINES INC",
+        "DELTA AIR LINES INC"
+      ]
+    },
+    {
+      "icao_type": "GL7T",
+      "model": "BD-700-2A12",
+      "manufacturer": "BOMBARDIER INC",
+      "airlines": [
+        "WILMINGTON TRUST CO TRUSTEE"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T02:07:20.815697+00:00",
+      "last_seen": "2026-02-17T02:07:20.815697+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "C25A",
+      "model": "525A",
+      "manufacturer": "CESSNA",
+      "airlines": [
+        "717 AVIATION HOLDINGS LLC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T01:59:00.664408+00:00",
+      "last_seen": "2026-02-17T01:59:00.664408+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "F900",
+      "model": "FALCON 900EX",
+      "manufacturer": "DASSAULT AVIATION",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:30:49.241717+00:00",
+      "last_seen": "2026-02-17T01:32:28.135636+00:00",
+      "times_seen": 2
+    },
+    {
+      "icao_type": "FA50",
+      "model": "FALCON 50",
+      "manufacturer": "DASSAULT-BREGUET",
+      "airlines": [
+        "REDBIRD HOLDINGS LLC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T01:37:03.939228+00:00",
+      "last_seen": "2026-02-17T01:37:03.939228+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "E170",
+      "model": "ERJ 170-100SU",
+      "manufacturer": "EMBRAER",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:17:12.260922+00:00",
+      "last_seen": "2026-02-17T03:45:03.743909+00:00",
+      "times_seen": 7,
+      "airlines": [
+        "UMB BANK NA TRUSTEE"
+      ]
+    },
+    {
+      "icao_type": "E75S",
+      "model": "ERJ-170-200 (short wing)",
+      "manufacturer": "EMBRAER",
+      "airlines": [
+        "DELTA AIR LINES INC"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T02:26:13.040909+00:00",
+      "last_seen": "2026-02-17T03:30:03.942935+00:00",
+      "times_seen": 4
+    },
+    {
+      "icao_type": "E75S",
+      "model": "ERJ 170-200 SU",
+      "manufacturer": "EMBRAER EMPRESA BRASILEIRA DE AERONUTICA S.A.",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:13:12.266577+00:00",
+      "last_seen": "2026-02-17T03:46:07.568302+00:00",
+      "times_seen": 7,
+      "airlines": [
+        "Jazz Aviation LP"
+      ]
+    },
+    {
+      "icao_type": "E55P",
+      "model": "EMB-505",
+      "manufacturer": "EMBRAER EXECUTIVE AIRCRAFT INC",
+      "airlines": [
+        "NETJETS SALES INC, D&S INDUSTRIES OF LA LLC, EAST PENN MANUFACTURING CO, ERNIE BALL INC, JJCD INVESTMENTS II LLC, QUINN JOHN B"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T01:43:18.152954+00:00",
+      "last_seen": "2026-02-17T01:43:18.152954+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "E75L",
+      "model": "ERJ 170-200 LR",
+      "manufacturer": "EMBRAER-EMPRESA BRASILEIRA DE",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:13:13.054156+00:00",
+      "last_seen": "2026-02-17T04:50:19.085550+00:00",
+      "times_seen": 93,
+      "airlines": [
+        "REPUBLIC AIRWAYS INC",
+        "DELTA AIR LINES INC",
+        "UNITED AIRLINES INC",
+        "AMERICAN AIRLINES INC"
+      ]
+    },
+    {
+      "icao_type": "AS50",
+      "model": "AS 350 B3",
+      "manufacturer": "EUROCOPTER",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:17:20.256125+00:00",
+      "last_seen": "2026-02-17T01:17:20.256125+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "PC12",
+      "model": "PC-12/45",
+      "manufacturer": "PILATUS",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:16:10.788545+00:00",
+      "last_seen": "2026-02-17T01:16:10.788545+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "C25B",
+      "model": "525B",
+      "manufacturer": "TEXTRON AVIATION INC",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:16:13.540430+00:00",
+      "last_seen": "2026-02-17T01:16:13.540430+00:00",
+      "times_seen": 1
+    },
+    {
+      "icao_type": "C68A",
+      "model": "680A",
+      "manufacturer": "TEXTRON AVIATION INC",
+      "is_military": false,
+      "first_seen": "2026-02-17T01:14:39.889600+00:00",
+      "last_seen": "2026-02-17T02:03:42.513026+00:00",
+      "times_seen": 3,
+      "airlines": [
+        "NETJETS SALES INC, CAPITAL ONE SERVICES LLC, CANNON CHARLES H JR, DAVITA INC, DJS ASSOCIATES LLC, EXVEN AIR LLC"
+      ]
+    },
+    {
+      "icao_type": "B789",
+      "model": "787-9",
+      "manufacturer": "THE BOEING COMPANY",
+      "airlines": [
+        "Air Canada"
+      ],
+      "is_military": false,
+      "first_seen": "2026-02-17T03:44:45.257795+00:00",
+      "last_seen": "2026-02-17T03:44:45.257795+00:00",
+      "times_seen": 1
+    }
+  ]
+}
