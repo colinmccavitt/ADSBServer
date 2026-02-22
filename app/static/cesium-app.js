@@ -1,4 +1,4 @@
-// ADS-B Tracker - CesiumJS 3D View
+// ADSB Server - CesiumJS 3D View
 
 Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwN2NlMWNjZC03NDZkLTQyMDYtOWIwOS1iNzUzMThkMzUzZmEiLCJpZCI6MjI3NDU1LCJpYXQiOjE3NzEyOTAwMzZ9.SRMWk_kOLpiG8dxYYtRrM2YGUbHfQ9oGELkmqdrlyXk';
 
@@ -6,6 +6,23 @@ Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOi
 const aircraftMap = {};   // icao -> { data, entity, trailPositions, trailEntity }
 let selectedIcao = null;
 let followMode = false;
+
+// ─── Watchlist ───────────────────────────────────────────────────────────────
+let watchlist = new Set();
+
+async function loadWatchlist() {
+    try {
+        const res = await fetch("/api/watchlist");
+        const data = await res.json();
+        watchlist = new Set((data.watchlist || []).map(r => r.toUpperCase()));
+    } catch (e) {
+        console.warn("Failed to load watchlist:", e);
+    }
+}
+
+function isWatchlisted(d) {
+    return d.registration && watchlist.has(d.registration.toUpperCase());
+}
 let showLabels = true;
 let showTrails = true;
 let showBuildings = true;
@@ -15,14 +32,17 @@ let receiverLat = 38.85596;
 let receiverLon = -77.04952;
 let receiverEntity = null;
 let buildingTileset = null;
+let viewCentered = false;
 
 // ─── Plane SVG for billboard ─────────────────────────────────────────────────
 const planeCanvasCache = {};
 
-function createPlaneCanvas(heading, altitude, isSelected) {
+function createPlaneCanvas(heading, altitude, isSelected, isWL) {
     const rotation = heading != null ? heading : 0;
     let color;
-    if (altitude != null) {
+    if (isWL) {
+        color = "#dc2626"; // watchlist always crimson
+    } else if (altitude != null) {
         if (altitude <= 0)        color = "#34d399";
         else if (altitude < 5000) color = "#22d3ee";
         else if (altitude < 15000) color = "#fbbf24";
@@ -32,40 +52,62 @@ function createPlaneCanvas(heading, altitude, isSelected) {
         color = "#60a5fa";
     }
 
-    const size = 40;
+    // Watchlist aircraft use a larger canvas with warning rings
+    const size = isWL ? 56 : 40;
+    const offset = isWL ? 8 : 0; // center the plane shape in the larger canvas
     const canvas = document.createElement("canvas");
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext("2d");
 
+    // Draw watchlist warning rings (static on canvas; pulsing handled by CSS in 2D)
+    if (isWL) {
+        const cx = size / 2;
+        const cy = size / 2;
+        // Outer ring
+        ctx.beginPath();
+        ctx.arc(cx, cy, cx - 2, 0, Math.PI * 2);
+        ctx.strokeStyle = isSelected ? "rgba(255,255,255,0.9)" : "rgba(220,38,38,0.85)";
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        // Inner ring
+        ctx.beginPath();
+        ctx.arc(cx, cy, cx - 7, 0, Math.PI * 2);
+        ctx.strokeStyle = isSelected ? "rgba(255,255,255,0.5)" : "rgba(220,38,38,0.45)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    }
+
     ctx.translate(size / 2, size / 2);
     ctx.rotate((rotation * Math.PI) / 180);
     ctx.translate(-size / 2, -size / 2);
 
-    // Glow effect for selected
     if (isSelected) {
-        ctx.shadowColor = "#3b82f6";
-        ctx.shadowBlur = 12;
+        ctx.shadowColor = isWL ? "#ff6060" : "#2eaadc";
+        ctx.shadowBlur = 14;
+    } else if (isWL) {
+        ctx.shadowColor = "#dc2626";
+        ctx.shadowBlur = 7;
     }
 
-    // Draw plane shape
+    // Draw plane shape (offset for watchlist larger canvas)
     ctx.beginPath();
-    ctx.moveTo(20, 4);   // nose
-    ctx.lineTo(16, 15);  // left wing root
-    ctx.lineTo(5, 20);   // left wingtip
-    ctx.lineTo(16, 22);  // left wing trailing
-    ctx.lineTo(14, 33);  // left tail
-    ctx.lineTo(20, 30);  // tail center
-    ctx.lineTo(26, 33);  // right tail
-    ctx.lineTo(24, 22);  // right wing trailing
-    ctx.lineTo(35, 20);  // right wingtip
-    ctx.lineTo(24, 15);  // right wing root
+    ctx.moveTo(20 + offset, 4 + offset);
+    ctx.lineTo(16 + offset, 15 + offset);
+    ctx.lineTo(5 + offset, 20 + offset);
+    ctx.lineTo(16 + offset, 22 + offset);
+    ctx.lineTo(14 + offset, 33 + offset);
+    ctx.lineTo(20 + offset, 30 + offset);
+    ctx.lineTo(26 + offset, 33 + offset);
+    ctx.lineTo(24 + offset, 22 + offset);
+    ctx.lineTo(35 + offset, 20 + offset);
+    ctx.lineTo(24 + offset, 15 + offset);
     ctx.closePath();
 
     ctx.fillStyle = color;
     ctx.fill();
-    ctx.strokeStyle = isSelected ? "#ffffff" : "#0f172a";
-    ctx.lineWidth = isSelected ? 1.5 : 0.8;
+    ctx.strokeStyle = (isSelected || isWL) ? "#ffffff" : "#37352f";
+    ctx.lineWidth = isSelected ? 1.5 : (isWL ? 1.5 : 0.8);
     ctx.stroke();
 
     return canvas;
@@ -141,10 +183,10 @@ async function loadBuildings() {
         buildingTileset.style = new Cesium.Cesium3DTileStyle({
             color: {
                 conditions: [
-                    ["${feature['cesium#estimatedHeight']} >= 100", "color('rgba(45, 80, 140, 0.85)')"],
-                    ["${feature['cesium#estimatedHeight']} >= 50", "color('rgba(40, 70, 120, 0.85)')"],
-                    ["${feature['cesium#estimatedHeight']} >= 20", "color('rgba(35, 60, 100, 0.8)')"],
-                    ["true", "color('rgba(30, 50, 80, 0.75)')"],
+                    ["${feature['cesium#estimatedHeight']} >= 100", "color('rgba(180, 175, 165, 0.85)')"],
+                    ["${feature['cesium#estimatedHeight']} >= 50", "color('rgba(195, 190, 180, 0.85)')"],
+                    ["${feature['cesium#estimatedHeight']} >= 20", "color('rgba(210, 205, 195, 0.8)')"],
+                    ["true", "color('rgba(220, 215, 205, 0.75)')"],
                 ],
             },
         });
@@ -168,8 +210,8 @@ function updateReceiverEntity(lat, lon) {
         position: Cesium.Cartesian3.fromDegrees(lon, lat, 0),
         point: {
             pixelSize: 14,
-            color: Cesium.Color.fromCssColorString("#3b82f6").withAlpha(0.4),
-            outlineColor: Cesium.Color.fromCssColorString("#3b82f6"),
+            color: Cesium.Color.fromCssColorString("#2eaadc").withAlpha(0.4),
+            outlineColor: Cesium.Color.fromCssColorString("#2eaadc"),
             outlineWidth: 3,
             heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
@@ -177,16 +219,16 @@ function updateReceiverEntity(lat, lon) {
         ellipse: {
             semiMinorAxis: 500,
             semiMajorAxis: 500,
-            material: Cesium.Color.fromCssColorString("#3b82f6").withAlpha(0.08),
+            material: Cesium.Color.fromCssColorString("#2eaadc").withAlpha(0.08),
             outline: true,
-            outlineColor: Cesium.Color.fromCssColorString("#3b82f6").withAlpha(0.25),
+            outlineColor: Cesium.Color.fromCssColorString("#2eaadc").withAlpha(0.25),
             outlineWidth: 1,
             heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
         },
         label: {
             text: "Receiver",
             font: "12px sans-serif",
-            fillColor: Cesium.Color.fromCssColorString("#3b82f6"),
+            fillColor: Cesium.Color.fromCssColorString("#2eaadc"),
             outlineColor: Cesium.Color.BLACK,
             outlineWidth: 2,
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
@@ -218,21 +260,47 @@ function updateAircraft(data) {
 
     if (d.latitude != null && d.longitude != null) {
         const position = Cesium.Cartesian3.fromDegrees(d.longitude, d.latitude, altMetersWGS84(d));
+
+        // Mirror 2D behavior: center the map view once when first aircraft appears.
+        if (!viewCentered) {
+            viewCentered = true;
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(d.longitude, d.latitude, 50000),
+                orientation: {
+                    heading: 0,
+                    pitch: Cesium.Math.toRadians(-45),
+                    roll: 0,
+                },
+                duration: 1.2,
+            });
+        }
+
         const isSelected = icao === selectedIcao;
+        const wl = isWatchlisted(d);
 
         // Record trail position
         entry.trailPositions.push(position);
         if (entry.trailPositions.length > 200) entry.trailPositions.shift();
 
         // Create billboard from canvas
-        const canvas = createPlaneCanvas(d.track, d.altitude, isSelected);
+        const canvas = createPlaneCanvas(d.track, d.altitude, isSelected, wl);
+        const bbSize = wl ? 52 : 36;
 
         if (entry.entity) {
             entry.entity.position = position;
             entry.entity.billboard.image = canvas;
+            entry.entity.billboard.width = bbSize;
+            entry.entity.billboard.height = bbSize;
             if (entry.entity.label) {
                 entry.entity.label.text = d.callsign || icao;
                 entry.entity.label.show = showLabels;
+                entry.entity.label.fillColor = wl
+                    ? Cesium.Color.fromCssColorString("#ff6060")
+                    : Cesium.Color.WHITE;
+                entry.entity.label.outlineColor = wl
+                    ? Cesium.Color.fromCssColorString("#7f0000")
+                    : Cesium.Color.BLACK;
+                entry.entity.label.scale = wl ? 1.1 : 0.9;
             }
         } else {
             entry.entity = viewer.entities.add({
@@ -240,26 +308,30 @@ function updateAircraft(data) {
                 position: position,
                 billboard: {
                     image: canvas,
-                    width: 36,
-                    height: 36,
+                    width: bbSize,
+                    height: bbSize,
                     verticalOrigin: Cesium.VerticalOrigin.CENTER,
                     horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
                     disableDepthTestDistance: Number.POSITIVE_INFINITY,
-                    eyeOffset: new Cesium.Cartesian3(0, 0, -50),
+                    eyeOffset: new Cesium.Cartesian3(0, 0, wl ? -200 : -50),
                     alignedAxis: Cesium.Cartesian3.UNIT_Z,
                 },
                 label: {
                     text: d.callsign || icao,
-                    font: "bold 12px sans-serif",
-                    fillColor: Cesium.Color.WHITE,
-                    outlineColor: Cesium.Color.BLACK,
+                    font: wl ? "bold 13px sans-serif" : "bold 12px sans-serif",
+                    fillColor: wl
+                        ? Cesium.Color.fromCssColorString("#ff6060")
+                        : Cesium.Color.WHITE,
+                    outlineColor: wl
+                        ? Cesium.Color.fromCssColorString("#7f0000")
+                        : Cesium.Color.BLACK,
                     outlineWidth: 3,
                     style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                     verticalOrigin: Cesium.VerticalOrigin.TOP,
-                    pixelOffset: new Cesium.Cartesian2(0, 22),
+                    pixelOffset: new Cesium.Cartesian2(0, wl ? 30 : 22),
                     disableDepthTestDistance: Number.POSITIVE_INFINITY,
                     show: showLabels,
-                    scale: 0.9,
+                    scale: wl ? 1.1 : 0.9,
                 },
                 properties: {
                     icao: icao,
@@ -344,15 +416,20 @@ function updateSidebarItem(icao, d) {
 
     el.classList.toggle("selected", icao === selectedIcao);
 
+    const wl = isWatchlisted(d);
+    if (wl) el.classList.add("watchlist");
+    else el.classList.remove("watchlist");
+
     const callsign = d.callsign || "------";
     const alt = d.altitude != null ? d.altitude.toLocaleString() + " ft" : "---";
     const speed = d.ground_speed != null ? Math.round(d.ground_speed) + " kt" : "";
     const typeStr = d.aircraft_type ? ` · ${d.aircraft_type}` : "";
     const regStr = d.registration || icao;
+    const badge = wl ? '<span class="watchlist-badge">&#9872; Watch</span>' : "";
 
     el.innerHTML = `
         <div class="ac-item-left">
-            <div class="ac-callsign">${callsign}${typeStr}</div>
+            <div class="ac-callsign">${callsign}${typeStr}${badge}</div>
             <div class="ac-icao">${regStr}${d.registration ? ' · ' + icao : ''}</div>
         </div>
         <div class="ac-item-right">
@@ -371,7 +448,8 @@ function selectAircraft(icao) {
 
         const oldEntry = aircraftMap[selectedIcao];
         if (oldEntry && oldEntry.entity && oldEntry.data.latitude != null) {
-            const canvas = createPlaneCanvas(oldEntry.data.track, oldEntry.data.altitude, false);
+            const oldWl = isWatchlisted(oldEntry.data);
+            const canvas = createPlaneCanvas(oldEntry.data.track, oldEntry.data.altitude, false, oldWl);
             oldEntry.entity.billboard.image = canvas;
         }
         if (oldEntry && oldEntry.trailEntity) {
@@ -393,7 +471,7 @@ function selectAircraft(icao) {
 
     // Update billboard to selected state
     if (entry.entity && entry.data.latitude != null) {
-        const canvas = createPlaneCanvas(entry.data.track, entry.data.altitude, true);
+        const canvas = createPlaneCanvas(entry.data.track, entry.data.altitude, true, isWatchlisted(entry.data));
         entry.entity.billboard.image = canvas;
     }
 
@@ -425,6 +503,12 @@ function selectAircraft(icao) {
 }
 
 function updateDetailPanel(d) {
+    const banner = document.getElementById("detail-watchlist-banner");
+    if (banner) {
+        if (isWatchlisted(d)) banner.classList.add("visible");
+        else banner.classList.remove("visible");
+    }
+
     document.getElementById("detail-callsign").textContent = d.callsign || "Unknown";
     document.getElementById("detail-icao").textContent = d.icao;
 
@@ -477,7 +561,7 @@ document.getElementById("detail-close").addEventListener("click", () => {
         if (el) el.classList.remove("selected");
         const entry = aircraftMap[selectedIcao];
         if (entry && entry.entity && entry.data.latitude != null) {
-            const canvas = createPlaneCanvas(entry.data.track, entry.data.altitude, false);
+            const canvas = createPlaneCanvas(entry.data.track, entry.data.altitude, false, isWatchlisted(entry.data));
             entry.entity.billboard.image = canvas;
         }
         if (entry && entry.trailEntity) {
@@ -541,9 +625,14 @@ handler.setInputAction((click) => {
 
 // ─── Stats ───────────────────────────────────────────────────────────────────
 function updateStats(stats) {
+    const posCount = stats.aircraft_with_position ?? 0;
+    document.getElementById("stat-aircraft").textContent =
+        stats.aircraft_count + " aircraft" + (posCount > 0 ? " (" + posCount + " pos)" : "");
+    const pps = stats.positions_per_second ?? 0;
+    const posEl = document.getElementById("stat-pos");
+    if (posEl) posEl.textContent = pps + " pos/s";
     document.getElementById("stat-msgs").textContent = stats.messages_per_second + " msg/s";
     document.getElementById("stat-total").textContent = stats.messages_total.toLocaleString() + " msgs";
-    document.getElementById("stat-aircraft").textContent = stats.aircraft_count + " aircraft";
 }
 
 // ─── WebSocket ───────────────────────────────────────────────────────────────
@@ -788,3 +877,4 @@ document.getElementById("cfg-autogain").addEventListener("click", async () => {
 // ─── Init ────────────────────────────────────────────────────────────────────
 connectWebSocket();
 loadConfig();
+loadWatchlist();

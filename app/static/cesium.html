@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ADS-B Tracker - 3D View</title>
+    <title>ADSB Server — 3D</title>
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Cesium.js"></script>
     <link href="https://cesium.com/downloads/cesiumjs/releases/1.138/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/cesium-style.css" />
@@ -24,11 +24,12 @@
     <div id="sidebar">
         <div id="sidebar-header">
             <div id="sidebar-title-row">
-                <h1>ADS-B 3D Tracker</h1>
+                <h1>ADSB Server</h1>
                 <button id="config-toggle" title="Settings">&#9881;</button>
             </div>
             <div id="stats">
                 <span id="stat-aircraft">0 aircraft</span>
+                <span id="stat-pos">0 pos/s</span>
                 <span id="stat-msgs">0 msg/s</span>
                 <span id="stat-total">0 msgs</span>
                 <span id="stat-status" class="status-disconnected">Connecting...</span>
@@ -61,6 +62,7 @@
 
     <div id="detail-panel" class="hidden">
         <button id="detail-close">&times;</button>
+        <div id="detail-watchlist-banner">&#9888; Watchlist Aircraft</div>
         <h2 id="detail-callsign">---</h2>
         <div class="detail-icao" id="detail-icao"></div>
 

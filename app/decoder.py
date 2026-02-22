@@ -16,16 +16,39 @@ logger = logging.getLogger(__name__)
 # Maximum distance (degrees) from receiver to accept a decoded position.
 MAX_DISTANCE_DEG = 5.0
 
+# ── 1-bit CRC error correction syndrome table ─────────────────────────────
+# Each single-bit error in a 112-bit Mode S message produces a unique 24-bit
+# CRC syndrome.  This table maps syndrome → bit position so we can correct
+# single-bit errors in DF17/18 messages (the same technique used by dump1090).
+_CRC_SYNDROME_TABLE: dict[int, int] = {}
+
+def _build_syndrome_table() -> dict[int, int]:
+    table: dict[int, int] = {}
+    for bit_pos in range(112):
+        msg_bytes = bytearray(14)
+        byte_idx = bit_pos // 8
+        bit_idx = 7 - (bit_pos % 8)
+        msg_bytes[byte_idx] |= (1 << bit_idx)
+        hex_msg = msg_bytes.hex().upper()
+        syndrome = pms.crc(hex_msg)
+        table[syndrome] = bit_pos
+    return table
+
+_CRC_SYNDROME_TABLE = _build_syndrome_table()
+
 
 class Decoder:
     """Stateful Mode S decoder that tracks per-aircraft position history
     for reference-based CPR decoding."""
 
-    def __init__(self):
+    def __init__(self, db_icao_check=None):
         # Track last known position per aircraft for reference-based decoding
         self._last_pos: dict[str, tuple[float, float]] = {}
         # Set of known ICAOs (from DF11/DF17/DF18) used to validate short messages
         self._known_icaos: set[str] = set()
+        # Optional callable(icao: str) -> bool for validating ICAOs against
+        # the aircraft database (enables tracking DF16/20/21-only aircraft)
+        self._db_icao_check = db_icao_check
 
     def decode(self, hex_msg: str, ref_lat: float, ref_lon: float) -> dict | None:
         """Decode a raw hex Mode S message into an aircraft state dict.
@@ -46,17 +69,54 @@ class Decoder:
         return None
 
     def _decode_long(self, msg: str, ref_lat: float, ref_lon: float) -> dict | None:
-        """Decode a 112-bit ADS-B Extended Squitter (DF17/DF18)."""
+        """Decode a 112-bit Mode S message (DF17/DF18 ADS-B + DF16/20/21 surveillance replies)."""
         try:
             df = pms.df(msg)
         except Exception:
             return None
 
+        # ── DF16/20/21: 112-bit surveillance replies (altitude / squawk) ──
+        if df in (16, 20):
+            icao = self._extract_validated_icao(msg)
+            if not icao:
+                return None
+            result: dict = {"icao": icao}
+            try:
+                alt = pms.common.altcode(msg)
+                if alt is not None:
+                    result["altitude"] = alt
+            except Exception:
+                pass
+            if len(result) > 1:
+                return result
+            return None
+
+        if df == 21:
+            icao = self._extract_validated_icao(msg)
+            if not icao:
+                return None
+            result: dict = {"icao": icao}
+            try:
+                squawk = pms.common.idcode(msg)
+                if squawk:
+                    result["squawk"] = str(squawk)
+            except Exception:
+                pass
+            if len(result) > 1:
+                return result
+            return None
+
+        # ── DF17/18: ADS-B Extended Squitter ──
         if df not in (17, 18):
             return None
 
-        if pms.crc(msg) != 0:
-            return None
+        syndrome = pms.crc(msg)
+        if syndrome != 0:
+            corrected = self._try_1bit_correction(msg, syndrome)
+            if corrected is not None:
+                msg = corrected
+            else:
+                return None
 
         icao = pms.icao(msg)
         if not icao:
@@ -121,7 +181,7 @@ class Decoder:
         return None
 
     def _decode_short(self, msg: str) -> dict | None:
-        """Decode a 56-bit Mode S short message (DF0/4/5/11/16/20/21)."""
+        """Decode a 56-bit Mode S short message (DF0/4/5/11)."""
         try:
             df = pms.df(msg)
         except Exception:
@@ -137,7 +197,7 @@ class Decoder:
             self._known_icaos.add(icao)
             return {"icao": icao}
 
-        elif df in (4, 20):
+        elif df == 4:
             icao = self._extract_validated_icao(msg)
             if not icao:
                 return None
@@ -152,7 +212,7 @@ class Decoder:
                 return result
             return None
 
-        elif df in (5, 21):
+        elif df == 5:
             icao = self._extract_validated_icao(msg)
             if not icao:
                 return None
@@ -167,7 +227,7 @@ class Decoder:
                 return result
             return None
 
-        elif df in (0, 16):
+        elif df == 0:
             icao = self._extract_validated_icao(msg)
             if not icao:
                 return None
@@ -184,6 +244,26 @@ class Decoder:
 
         return None
 
+    @staticmethod
+    def _try_1bit_correction(msg: str, syndrome: int) -> str | None:
+        """Attempt to correct a single-bit error in a DF17/18 message.
+
+        Uses the precomputed syndrome table to identify the flipped bit.
+        Returns the corrected hex message, or None if the syndrome does
+        not correspond to a single-bit error.
+        """
+        bit_pos = _CRC_SYNDROME_TABLE.get(syndrome)
+        if bit_pos is None:
+            return None
+        msg_bytes = bytearray.fromhex(msg)
+        byte_idx = bit_pos // 8
+        bit_idx = 7 - (bit_pos % 8)
+        msg_bytes[byte_idx] ^= (1 << bit_idx)
+        corrected = msg_bytes.hex().upper()
+        if pms.crc(corrected) != 0:
+            return None
+        return corrected
+
     def _extract_validated_icao(self, msg: str) -> str | None:
         """Extract ICAO from a Mode S message's Address/Parity field.
 
@@ -198,6 +278,10 @@ class Decoder:
             return None
         icao = icao.upper()
         if icao in self._known_icaos:
+            return icao
+        # Check against aircraft database if available
+        if self._db_icao_check and self._db_icao_check(icao):
+            self._known_icaos.add(icao)
             return icao
         return None
 
@@ -225,8 +309,8 @@ class Decoder:
                     abs(lat - ref_lat) < MAX_DISTANCE_DEG
                     and abs(lon - ref_lon) < MAX_DISTANCE_DEG
                 ):
-                    result["latitude"] = round(lat, 6)
-                    result["longitude"] = round(lon, 6)
+                    result["latitude"] = round(lat, 4)
+                    result["longitude"] = round(lon, 4)
                     self._last_pos[icao] = (lat, lon)
                 else:
                     logger.debug(

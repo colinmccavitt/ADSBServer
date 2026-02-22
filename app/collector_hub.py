@@ -1,11 +1,12 @@
 """Collector Hub — TCP server that accepts raw hex ADS-B feeds from collectors.
 
 Listens on a dedicated TCP port. Each collector connects and:
-  1. Sends a JSON hello line: {"id":"abc","name":"roof","lat":38.8,"lon":-77.0}
+  1. Sends a JSON hello line: {"id":"abc","name":"roof","lat":38.8,"lon":-77.0,"api_key":"..."}
   2. Streams raw hex Mode S messages, one per line.
 
 The hub decodes each message using pyModeS and feeds results into the
 AircraftStore, tracking which collectors are connected.
+Collectors must supply a valid API key in the hello message (when keys are configured).
 """
 
 from __future__ import annotations
@@ -14,9 +15,11 @@ import asyncio
 import json
 import logging
 import time
+from collections import deque
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from app import auth
 from app.decoder import Decoder
 from app.models import CollectorInfo
 
@@ -24,6 +27,12 @@ if TYPE_CHECKING:
     from app.aircraft_store import AircraftStore
 
 logger = logging.getLogger(__name__)
+
+# A single ADS-B transponder emits ~6-7 messages/sec.  Close-range receivers
+# can see 50-200× more due to multipath / duplicate SDR outputs.
+# Cap per-ICAO store updates to prevent one loud aircraft from saturating the
+# async event loop (the decoded data is largely redundant past this rate).
+MAX_UPDATES_PER_ICAO_PER_SEC = 25
 
 
 class _CollectorConnection:
@@ -38,22 +47,23 @@ class _CollectorConnection:
         self.messages_total = 0
         self.messages_per_second = 0.0
         self.last_heartbeat = datetime.now()
-        self._rate_timestamps: list[float] = []
+        self._rate_count = 0
+        self._rate_window_start = time.time()
 
     @property
     def aircraft_count(self) -> int:
         return 0  # populated from store tracking
 
     def record_message(self):
-        now = time.time()
         self.messages_total += 1
-        self._rate_timestamps.append(now)
-        cutoff = now - 10
-        self._rate_timestamps = [t for t in self._rate_timestamps if t > cutoff]
-        count = len(self._rate_timestamps)
-        elapsed = min(10.0, now - self._rate_timestamps[0]) if self._rate_timestamps else 10.0
-        self.messages_per_second = round(count / max(elapsed, 0.1), 1)
-        self.last_heartbeat = datetime.now()
+        self._rate_count += 1
+        now = time.time()
+        elapsed = now - self._rate_window_start
+        if elapsed >= 2.0:
+            self.messages_per_second = round(self._rate_count / elapsed, 1)
+            self._rate_count = 0
+            self._rate_window_start = now
+            self.last_heartbeat = datetime.now()
 
 
 class CollectorHub:
@@ -62,7 +72,8 @@ class CollectorHub:
     def __init__(self, store: AircraftStore, port: int = 4002):
         self._store = store
         self._port = port
-        self._decoder = Decoder()
+        db_check = store._aircraft_db.has_icao if store._aircraft_db else None
+        self._decoder = Decoder(db_icao_check=db_check)
         self._collectors: dict[str, _CollectorConnection] = {}
         self._lock = asyncio.Lock()
         self._server: asyncio.Server | None = None
@@ -141,6 +152,19 @@ class CollectorHub:
             hello = json.loads(hello_line)
 
             collector_id = hello.get("id", f"unknown-{addr}")
+
+            # Validate API key
+            api_key = hello.get("api_key")
+            if not auth.validate_collector_key(api_key):
+                logger.warning(
+                    "Collector %s rejected: invalid API key from %s",
+                    collector_id, addr,
+                )
+                writer.write(b'{"error":"invalid_api_key"}\n')
+                await writer.drain()
+                writer.close()
+                return
+
             conn = _CollectorConnection(collector_id, hello)
 
             ref_lat = conn.latitude or 0.0
@@ -156,6 +180,20 @@ class CollectorHub:
             )
 
             # Read raw hex messages, one per line
+            _msg_count = 0
+            _filtered_count = 0
+            _decoded_count = 0
+            _decode_fail_count = 0
+            _store_count = 0
+            _rate_limited_count = 0
+            _position_count = 0
+            _icaos_seen: set[str] = set()
+            _last_diag = time.time()
+            _diag_interval = 30
+
+            _update_interval = 1.0 / MAX_UPDATES_PER_ICAO_PER_SEC
+            _last_store_update: dict[str, float] = {}
+
             while True:
                 line_bytes = await reader.readline()
                 if not line_bytes:
@@ -165,19 +203,51 @@ class CollectorHub:
                 if not hex_msg:
                     continue
 
-                # Strip * ; framing if present
+                _msg_count += 1
+
                 if hex_msg.startswith("*") and hex_msg.endswith(";"):
                     hex_msg = hex_msg[1:-1]
                 hex_msg = hex_msg.upper()
 
                 if len(hex_msg) not in (14, 28):
+                    _filtered_count += 1
                     continue
 
                 conn.record_message()
 
                 decoded = self._decoder.decode(hex_msg, ref_lat, ref_lon)
                 if decoded:
-                    await self._store.update(decoded, source_collector=collector_id)
+                    _decoded_count += 1
+                    icao_key = decoded.get("icao", "")
+                    if "latitude" in decoded and "longitude" in decoded:
+                        _position_count += 1
+                    _icaos_seen.add(icao_key)
+
+                    now = time.time()
+                    if now - _last_store_update.get(icao_key, 0) >= _update_interval:
+                        _last_store_update[icao_key] = now
+                        await self._store.update(decoded, source_collector=collector_id)
+                        _store_count += 1
+                    else:
+                        _rate_limited_count += 1
+                else:
+                    _decode_fail_count += 1
+
+                now = time.time()
+                if now - _last_diag >= _diag_interval:
+                    logger.info(
+                        "Collector %s diagnostics — "
+                        "%d msgs (%.0f/s), %d decoded, %d with position, "
+                        "%d failed CRC/decode, %d filtered (bad length), "
+                        "%d rate-limited, %d stored, %d unique ICAOs",
+                        collector_id,
+                        _msg_count, conn.messages_per_second,
+                        _decoded_count, _position_count,
+                        _decode_fail_count, _filtered_count,
+                        _rate_limited_count, _store_count,
+                        len(_icaos_seen),
+                    )
+                    _last_diag = now
 
         except asyncio.TimeoutError:
             logger.warning("Collector hello timeout from %s", addr)

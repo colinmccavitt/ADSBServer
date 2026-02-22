@@ -2,5 +2,30 @@
   "latitude": 38.85596396471333,
   "longitude": -77.04951658878798,
   "http_port": 8080,
-  "collector_port": 4002
+  "collector_port": 4002,
+  "api_keys": {
+    "collector_keys": [
+      "b7de80aa-3b11-4f5b-a4ca-976bf04e8daf",
+      "e67b5c19-583c-4ba9-8d6a-1cea95dbd879",
+      "f623ab3d-ef37-4f41-a4ba-ce711a25408b"
+    ],
+    "client_keys": [
+      "a33efd00-0acf-4428-adcb-d362942f61a1",
+      "b6de175f-b8cf-4261-bfe0-f64976ee6653"
+    ]
+  },
+  "watchlist": [
+    "N1016","N1018H","N120JM","N129QS","N134BR","N157A","N159L","N163PA",
+    "N168BF","N168D","N173PA","N173S","N187D","N196D","N1HC","N212CP",
+    "N2189M","N219D","N219MG","N221SG","N226G","N227SV","N2357G","N235JF",
+    "N248AB","N259SK","N2679C","N288KA","N308AB","N312ME","N313P","N325RC",
+    "N331P","N35NK","N368CE","N3796B","N379P","N4009L","N404AC","N4456A",
+    "N4466A","N4476S","N4489A","N44982","N4557C","N474AW","N475LC","N476LC",
+    "N478GS","N486AE","N488CR","N50BH","N505LL","N510MG","N5117H","N5139A",
+    "N5155A","N521DB","N541PA","N547PA","N549PA","N54PA","N58AS","N588AE",
+    "N596GA","N599XQ","N600GC","N614RD","N6161Q","N63MU","N6369C","N71PG",
+    "N719GB","N724CL","N733MA","N740EH","N787WH","N8062Z","N8068V","N808LP",
+    "N8183J","N8213G","N829MG","N837DR","N845S","N85VM","N88ZL","N964BW",
+    "N965BW","N966BW","N967BW","N968BW","N970SJ","N972BJ","N977GA","N982RK"
+  ]
 }

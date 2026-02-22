@@ -107,6 +107,10 @@ class AircraftDB:
             "previous_age_days": round(previous_age, 1) if previous_age is not None else None,
         }
 
+    def has_icao(self, icao: str) -> bool:
+        """Check if an ICAO hex code exists in the local database."""
+        return icao.upper() in self._db
+
     def get_status(self) -> dict[str, Any]:
         """Return current database status for the /api/db/status endpoint."""
         age = self._age_days()

@@ -67,6 +67,8 @@ class ReceiverStats(BaseModel):
     aircraft_with_position: int = Field(..., description="Aircraft with a valid position")
     messages_total: int = Field(..., description="Total SBS messages received")
     messages_per_second: float = Field(..., description="Average messages per second over last 60s")
+    positions_total: int = Field(0, description="Total position messages received")
+    positions_per_second: float = Field(0.0, description="Position messages per second over last 60s")
 
 
 class CollectorInfo(BaseModel):
@@ -80,3 +82,12 @@ class CollectorInfo(BaseModel):
     aircraft_count: int = Field(0, description="Aircraft currently reported by this collector")
     messages_per_second: float = Field(0.0, description="Message rate from this collector")
     last_heartbeat: datetime = Field(default_factory=datetime.now, description="Last heartbeat timestamp")
+
+
+class ConnectedClientInfo(BaseModel):
+    """Information about a connected WebSocket client (browser or API)."""
+
+    client_id: str = Field(..., description="Unique client connection identifier")
+    client_type: str = Field("browser", description="Client type: 'browser' or 'api'")
+    remote_addr: str = Field("", description="Remote IP address")
+    connected_since: datetime = Field(default_factory=datetime.now, description="When the client connected")

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ADSB Server — Admin</title>
+    <link rel="stylesheet" href="/static/admin.css" />
+</head>
+<body>
+    <!-- Top bar -->
+    <div class="topbar">
+        <div class="topbar-left">
+            <h1>ADSB Server</h1>
+            <span class="topbar-badge">Admin</span>
+            <div class="connection-status">
+                <span class="connection-dot" id="sse-dot"></span>
+                <span id="sse-status">Connecting...</span>
+            </div>
+        </div>
+        <div class="topbar-links">
+            <a href="/">2D Map</a>
+            <a href="/3d">3D Globe</a>
+        </div>
+    </div>
+
+    <!-- Stats bar -->
+    <div class="stats-bar">
+        <div class="stat-card">
+            <div class="stat-label">Aircraft Tracked</div>
+            <div class="stat-value accent-blue" id="stat-aircraft">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Messages / sec</div>
+            <div class="stat-value accent-purple" id="stat-mps">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Active Collectors</div>
+            <div class="stat-value accent-amber" id="stat-collectors">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Connected Clients</div>
+            <div class="stat-value accent-green" id="stat-clients">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Uptime</div>
+            <div class="stat-value" id="stat-uptime">0s</div>
+        </div>
+    </div>
+
+    <!-- Main content -->
+    <div class="content">
+        <!-- Collectors section -->
+        <div class="section">
+            <div class="section-header">
+                <span class="section-title">Collectors</span>
+                <span class="section-count" id="collectors-count">0 connected</span>
+            </div>
+            <div id="collectors-table-wrapper">
+                <table class="data-table" id="collectors-table">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Name / ID</th>
+                            <th>Location</th>
+                            <th>Aircraft</th>
+                            <th>Msg/s</th>
+                            <th>Connected</th>
+                            <th>Last Heartbeat</th>
+                        </tr>
+                    </thead>
+                    <tbody id="collectors-body">
+                    </tbody>
+                </table>
+                <div class="empty-state" id="collectors-empty">
+                    <div class="empty-state-icon">&#9737;</div>
+                    No collectors connected
+                </div>
+            </div>
+        </div>
+
+        <!-- Clients section -->
+        <div class="section">
+            <div class="section-header">
+                <span class="section-title">Clients</span>
+                <span class="section-count" id="clients-count">0 connected</span>
+            </div>
+            <div id="clients-table-wrapper">
+                <table class="data-table" id="clients-table">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Client ID</th>
+                            <th>Remote Address</th>
+                            <th>Connected Since</th>
+                            <th>Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody id="clients-body">
+                    </tbody>
+                </table>
+                <div class="empty-state" id="clients-empty">
+                    <div class="empty-state-icon">&#9741;</div>
+                    No clients connected
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/admin.js"></script>
+</body>
+</html>

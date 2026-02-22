@@ -1,8 +1,25 @@
-// ADS-B Tracker - Map & WebSocket client
+// ADSB Server - Map & WebSocket client
 
 const aircraft = {};       // icao -> { data, marker, label, trail }
 let selectedIcao = null;
 let ws = null;
+
+// --- Watchlist ---
+let watchlist = new Set();
+
+async function loadWatchlist() {
+    try {
+        const res = await fetch("/api/watchlist");
+        const data = await res.json();
+        watchlist = new Set((data.watchlist || []).map(r => r.toUpperCase()));
+    } catch (e) {
+        console.warn("Failed to load watchlist:", e);
+    }
+}
+
+function isWatchlisted(d) {
+    return d.registration && watchlist.has(d.registration.toUpperCase());
+}
 
 // --- Plane SVG icon ---
 function createPlaneIcon(heading, altitude) {
@@ -19,7 +36,7 @@ function createPlaneIcon(heading, altitude) {
 
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" style="transform:rotate(${rotation}deg)">
         <path d="M12 2 L10 9 L3 12 L10 13 L9 21 L12 18 L15 21 L14 13 L21 12 L14 9 Z"
-              fill="${color}" stroke="#0f172a" stroke-width="0.8"/>
+              fill="${color}" stroke="#ffffff" stroke-width="0.8"/>
     </svg>`;
 
     return L.divIcon({
@@ -30,22 +47,42 @@ function createPlaneIcon(heading, altitude) {
     });
 }
 
+function createWatchlistPlaneIcon(heading) {
+    const rotation = heading != null ? heading : 0;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="34" height="34" style="transform:rotate(${rotation}deg);position:relative;z-index:2;filter:drop-shadow(0 0 4px rgba(220,38,38,0.8))">
+        <path d="M12 2 L10 9 L3 12 L10 13 L9 21 L12 18 L15 21 L14 13 L21 12 L14 9 Z"
+              fill="#dc2626" stroke="#ffffff" stroke-width="1.4"/>
+    </svg>`;
+    const html = `<div class="watchlist-marker">
+        <div class="watchlist-ring"></div>
+        <div class="watchlist-ring-2"></div>
+        ${svg}
+    </div>`;
+    return L.divIcon({
+        html: html,
+        iconSize: [52, 52],
+        iconAnchor: [26, 26],
+        className: ""
+    });
+}
+
 // --- Map setup ---
 const map = L.map("map", {
     center: [38.85596, -77.04952],
-    zoom: 11,
+    zoom: 7,
     zoomControl: true,
     attributionControl: true,
 });
 
-// Dark map tiles
-L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+// Light map tiles (CartoDB Positron)
+L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
     subdomains: "abcd",
     maxZoom: 19,
 }).addTo(map);
 
-// Map will be recentered when config loads from the server
+// Map recenters automatically when the first collector or aircraft is received
+let mapCentered = false;
 
 // --- Aircraft management ---
 function updateAircraft(data) {
@@ -70,17 +107,29 @@ function updateAircraft(data) {
     if (d.latitude != null && d.longitude != null) {
         const latLng = [d.latitude, d.longitude];
 
+        // Auto-center on first aircraft if no collectors have set the view yet
+        if (!mapCentered) {
+            map.setView(latLng, 9);
+            mapCentered = true;
+        }
+
         // Track trail
         entry.trail.push(latLng);
         if (entry.trail.length > 100) entry.trail.shift();
 
+        const wl = isWatchlisted(d);
+        const icon = wl
+            ? createWatchlistPlaneIcon(d.track)
+            : createPlaneIcon(d.track, d.altitude);
+
         if (entry.marker) {
             entry.marker.setLatLng(latLng);
-            entry.marker.setIcon(createPlaneIcon(d.track, d.altitude));
+            entry.marker.setIcon(icon);
+            if (wl) entry.marker.setZIndexOffset(10000);
         } else {
             entry.marker = L.marker(latLng, {
-                icon: createPlaneIcon(d.track, d.altitude),
-                zIndexOffset: d.altitude || 0,
+                icon: icon,
+                zIndexOffset: wl ? 10000 : (d.altitude || 0),
             }).addTo(map);
 
             entry.marker.on("click", () => selectAircraft(icao));
@@ -103,12 +152,19 @@ function updateAircraft(data) {
             }).addTo(map);
         }
 
+        // Apply watchlist label styling
+        const labelEl = entry.label.getElement();
+        if (labelEl) {
+            if (wl) labelEl.classList.add("watchlist-label");
+            else labelEl.classList.remove("watchlist-label");
+        }
+
         // Draw trail if this aircraft is selected
         if (icao === selectedIcao && entry.trail.length > 1) {
             if (entry.trailLine) entry.trailLine.setLatLngs(entry.trail);
             else {
                 entry.trailLine = L.polyline(entry.trail, {
-                    color: "#3b82f6",
+                    color: "#2eaadc",
                     weight: 2,
                     opacity: 0.6,
                     dashArray: "6 4",
@@ -164,15 +220,20 @@ function updateSidebarItem(icao, d) {
     if (icao === selectedIcao) el.classList.add("selected");
     else el.classList.remove("selected");
 
+    const wl = isWatchlisted(d);
+    if (wl) el.classList.add("watchlist");
+    else el.classList.remove("watchlist");
+
     const callsign = d.callsign || "------";
     const alt = d.altitude != null ? d.altitude.toLocaleString() + " ft" : "---";
     const speed = d.ground_speed != null ? Math.round(d.ground_speed) + " kt" : "";
     const typeStr = d.aircraft_type ? ` · ${d.aircraft_type}` : "";
     const regStr = d.registration || icao;
+    const badge = wl ? '<span class="watchlist-badge">&#9872; Watch</span>' : "";
 
     el.innerHTML = `
         <div class="ac-item-left">
-            <div class="ac-callsign">${callsign}${typeStr}</div>
+            <div class="ac-callsign">${callsign}${typeStr}${badge}</div>
             <div class="ac-icao">${regStr}${d.registration ? ' · ' + icao : ''}</div>
         </div>
         <div class="ac-item-right">
@@ -212,7 +273,7 @@ function selectAircraft(icao) {
     // Draw trail
     if (entry.trail.length > 1) {
         entry.trailLine = L.polyline(entry.trail, {
-            color: "#3b82f6",
+            color: "#2eaadc",
             weight: 2,
             opacity: 0.6,
             dashArray: "6 4",
@@ -224,6 +285,12 @@ function selectAircraft(icao) {
 }
 
 function updateDetailPanel(d) {
+    const banner = document.getElementById("detail-watchlist-banner");
+    if (banner) {
+        if (isWatchlisted(d)) banner.classList.add("visible");
+        else banner.classList.remove("visible");
+    }
+
     document.getElementById("detail-callsign").textContent = d.callsign || "Unknown";
     document.getElementById("detail-icao").textContent = d.icao;
 
@@ -296,9 +363,13 @@ document.getElementById("detail-close").addEventListener("click", () => {
 
 // --- Stats (pushed via WebSocket) ---
 function updateStats(stats) {
+    const posCount = stats.aircraft_with_position ?? 0;
+    document.getElementById("stat-aircraft").textContent =
+        stats.aircraft_count + " aircraft" + (posCount > 0 ? " (" + posCount + " pos)" : "");
+    const pps = stats.positions_per_second ?? 0;
+    document.getElementById("stat-pos").textContent = pps + " pos/s";
     document.getElementById("stat-msgs").textContent = stats.messages_per_second + " msg/s";
     document.getElementById("stat-total").textContent = stats.messages_total.toLocaleString() + " msgs";
-    document.getElementById("stat-aircraft").textContent = stats.aircraft_count + " aircraft";
 }
 
 // --- WebSocket ---
@@ -319,8 +390,6 @@ function connectWebSocket() {
             if (msg.stats) updateStats(msg.stats);
         } else if (msg.type === "remove" && msg.icao) {
             removeAircraft(msg.icao);
-        } else if (msg.type === "autogain") {
-            handleAutoGainProgress(msg);
         }
     };
 
@@ -337,195 +406,12 @@ function connectWebSocket() {
     };
 }
 
-// --- Config panel ---
-let receiverMarker = null;
-
+// --- Config panel (database section only) ---
 document.getElementById("config-toggle").addEventListener("click", () => {
     const panel = document.getElementById("config-panel");
     const btn = document.getElementById("config-toggle");
     panel.classList.toggle("config-hidden");
     btn.classList.toggle("active");
-});
-
-async function loadConfig() {
-    try {
-        const res = await fetch("/api/config");
-        const cfg = await res.json();
-
-        document.getElementById("cfg-lat").value = cfg.latitude;
-        document.getElementById("cfg-lon").value = cfg.longitude;
-
-        // Populate gain dropdown
-        const sel = document.getElementById("cfg-gain");
-        sel.innerHTML = "";
-        for (const g of cfg.supported_gains) {
-            const opt = document.createElement("option");
-            opt.value = g;
-            opt.textContent = g + " dB";
-            if (Math.abs(g - cfg.gain) < 0.01) opt.selected = true;
-            sel.appendChild(opt);
-        }
-
-        // Center map on receiver and place marker
-        map.setView([cfg.latitude, cfg.longitude], map.getZoom());
-        updateReceiverMarker(cfg.latitude, cfg.longitude);
-    } catch (e) {
-        console.error("Failed to load config:", e);
-    }
-}
-
-function updateReceiverMarker(lat, lon) {
-    const icon = L.divIcon({
-        html: `<svg width="18" height="18" viewBox="0 0 18 18">
-            <circle cx="9" cy="9" r="7" fill="#3b82f6" fill-opacity="0.3" stroke="#3b82f6" stroke-width="2"/>
-            <circle cx="9" cy="9" r="3" fill="#3b82f6"/>
-        </svg>`,
-        iconSize: [18, 18],
-        iconAnchor: [9, 9],
-        className: "",
-    });
-
-    if (receiverMarker) {
-        receiverMarker.setLatLng([lat, lon]);
-    } else {
-        receiverMarker = L.marker([lat, lon], { icon, interactive: false, zIndexOffset: -1000 }).addTo(map);
-    }
-}
-
-document.getElementById("cfg-save").addEventListener("click", async () => {
-    const lat = parseFloat(document.getElementById("cfg-lat").value);
-    const lon = parseFloat(document.getElementById("cfg-lon").value);
-    const gain = parseFloat(document.getElementById("cfg-gain").value);
-    const statusEl = document.getElementById("cfg-status");
-
-    if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-        statusEl.textContent = "Invalid coordinates";
-        statusEl.className = "error";
-        return;
-    }
-
-    statusEl.textContent = "Saving...";
-    statusEl.className = "";
-
-    try {
-        const res = await fetch("/api/config", {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ latitude: lat, longitude: lon, gain: gain }),
-        });
-
-        if (!res.ok) throw new Error("Server returned " + res.status);
-        const cfg = await res.json();
-
-        statusEl.textContent = "Saved";
-        statusEl.className = "success";
-
-        // Recenter map and update marker
-        map.setView([cfg.latitude, cfg.longitude], map.getZoom());
-        updateReceiverMarker(cfg.latitude, cfg.longitude);
-
-        setTimeout(() => { statusEl.textContent = ""; }, 3000);
-    } catch (e) {
-        statusEl.textContent = "Error: " + e.message;
-        statusEl.className = "error";
-    }
-});
-
-// --- Auto Gain ---
-let autoGainRunning = false;
-
-function handleAutoGainProgress(msg) {
-    const container = document.getElementById("autogain-results");
-    container.classList.remove("autogain-hidden");
-
-    if (msg.phase === "testing") {
-        const results = msg.results || [];
-        const maxMsgs = Math.max(1, ...results.map(r => r.messages));
-
-        let html = `<div class="autogain-progress">Testing gain ${msg.step}/${msg.total_steps}: <b>${msg.gain} dB</b>...</div>`;
-
-        // Bars for completed results
-        for (const r of results) {
-            const pct = Math.round((r.messages / maxMsgs) * 100);
-            html += `<div class="autogain-bar-row">
-                <div class="autogain-bar-label">${r.gain} dB</div>
-                <div class="autogain-bar-track"><div class="autogain-bar-fill" style="width:${pct}%"></div></div>
-                <div class="autogain-bar-value">${r.messages} msgs</div>
-            </div>`;
-        }
-
-        // Pulsing bar for current test
-        html += `<div class="autogain-bar-row">
-            <div class="autogain-bar-label">${msg.gain} dB</div>
-            <div class="autogain-bar-track"><div class="autogain-bar-fill testing" style="width:100%"></div></div>
-            <div class="autogain-bar-value">...</div>
-        </div>`;
-
-        container.innerHTML = html;
-
-    } else if (msg.phase === "done") {
-        const results = msg.results || [];
-        const bestGain = msg.best_gain;
-        const maxMsgs = Math.max(1, ...results.map(r => r.messages));
-
-        let html = `<div class="autogain-progress">Best gain: <b>${bestGain} dB</b></div>`;
-
-        for (const r of results) {
-            const pct = Math.round((r.messages / maxMsgs) * 100);
-            const isBest = Math.abs(r.gain - bestGain) < 0.01;
-            html += `<div class="autogain-bar-row">
-                <div class="autogain-bar-label">${r.gain} dB</div>
-                <div class="autogain-bar-track"><div class="autogain-bar-fill${isBest ? " best" : ""}" style="width:${pct}%"></div></div>
-                <div class="autogain-bar-value${isBest ? " best" : ""}">${r.messages} msgs</div>
-            </div>`;
-        }
-
-        container.innerHTML = html;
-
-        // Update the gain dropdown to the new best gain
-        const sel = document.getElementById("cfg-gain");
-        for (const opt of sel.options) {
-            opt.selected = Math.abs(parseFloat(opt.value) - bestGain) < 0.01;
-        }
-
-        autoGainRunning = false;
-        document.getElementById("cfg-autogain").disabled = false;
-        document.getElementById("cfg-save").disabled = false;
-        document.getElementById("cfg-autogain").textContent = "Auto Gain";
-        document.getElementById("cfg-status").textContent = "Gain set to " + bestGain + " dB";
-        document.getElementById("cfg-status").className = "success";
-        setTimeout(() => {
-            document.getElementById("cfg-status").textContent = "";
-            document.getElementById("cfg-status").className = "";
-        }, 5000);
-    }
-}
-
-document.getElementById("cfg-autogain").addEventListener("click", async () => {
-    if (autoGainRunning) return;
-    autoGainRunning = true;
-
-    const btn = document.getElementById("cfg-autogain");
-    btn.disabled = true;
-    btn.textContent = "Testing...";
-    document.getElementById("cfg-save").disabled = true;
-    document.getElementById("cfg-status").textContent = "";
-
-    // Open config panel if not already open
-    document.getElementById("config-panel").classList.remove("config-hidden");
-    document.getElementById("config-toggle").classList.add("active");
-
-    try {
-        const res = await fetch("/api/autogain", { method: "POST" });
-        if (!res.ok) throw new Error("Server returned " + res.status);
-    } catch (e) {
-        document.getElementById("cfg-status").textContent = "Error: " + e.message;
-        document.getElementById("cfg-status").className = "error";
-        autoGainRunning = false;
-        btn.disabled = false;
-        btn.textContent = "Auto Gain";
-        document.getElementById("cfg-save").disabled = false;
-    }
 });
 
 // --- Aircraft Database Status ---
@@ -643,6 +529,19 @@ async function loadCollectors() {
                 updateCollectorMarker(c.collector_id, c.name, c.latitude, c.longitude);
             }
         }
+
+        // Auto-center map on collectors the first time we get data
+        if (!mapCentered && collectors.length > 0) {
+            const withPos = collectors.filter(c => c.latitude != null && c.longitude != null);
+            if (withPos.length === 1) {
+                map.setView([withPos[0].latitude, withPos[0].longitude], 9);
+                mapCentered = true;
+            } else if (withPos.length > 1) {
+                const bounds = L.latLngBounds(withPos.map(c => [c.latitude, c.longitude]));
+                map.fitBounds(bounds, { padding: [50, 50], maxZoom: 10 });
+                mapCentered = true;
+            }
+        }
     } catch (e) {
         // Not in server mode or server unavailable — silently ignore
     }
@@ -680,6 +579,6 @@ setInterval(loadCollectors, 10000);
 
 // --- Init ---
 connectWebSocket();
-loadConfig();
 loadDbStatus();
 loadCollectors();
+loadWatchlist();
