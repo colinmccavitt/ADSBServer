@@ -15,7 +15,6 @@ import asyncio
 import json
 import logging
 import time
-from collections import deque
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 

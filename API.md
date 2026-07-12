@@ -8,42 +8,47 @@ http://<host>:8080
 
 ---
 
-## Run Modes
+## Architecture
 
-The application supports three run modes configured via `--mode` CLI flag or the `mode` field in `config.json`:
-
-| Mode           | Description                                                                                     |
-| -------------- | ----------------------------------------------------------------------------------------------- |
-| `standalone`   | Default. Full local receiver + API server. Original single-instance behaviour.                   |
-| `collector`    | Local receiver + API server + pushes aircraft data upstream to a central server via WebSocket.   |
-| `server`       | Central aggregation server. Receives data from remote collectors and serves a unified view. Optionally also runs a local decoder with `--collect`. |
+This server is always a **central aggregation server**: it exposes the HTTP
+API/web UI and a raw-TCP `CollectorHub` (default port `4002`, see
+[Collector Protocol](#collector-protocol-tcp-port-4002) below) that one or
+more remote collectors connect to and stream decoded ADS-B data into. There
+is no `--mode` flag or standalone/collector split — a single process always
+does both jobs. Running with exactly one collector on the same machine looks
+and feels like a "standalone" receiver, but architecturally it's just this
+server with one collector attached.
 
 ---
 
 ## REST API Endpoints
+
+All `/api/*` endpoints require an `X-API-Key` header **unless** no client
+keys are configured (open access) or the request comes from the server's
+own browser UI — see [Authentication](#authentication).
 
 ### Aircraft
 
 | Method | Endpoint                 | Description                          | Response Model         |
 | ------ | ------------------------ | ------------------------------------ | ---------------------- |
 | `GET`  | `/api/aircraft`          | List all currently tracked aircraft  | `AircraftList`         |
-| `GET`  | `/api/aircraft/{icao}`   | Get a single aircraft by ICAO hex    | `Aircraft` or 404      |
+| `GET`  | `/api/aircraft/{icao}`   | Get a single aircraft by ICAO hex    | `Aircraft` or `{"error": ...}` |
 
 ### Receiver
 
-| Method | Endpoint          | Description                              | Response Model           |
-| ------ | ----------------- | ---------------------------------------- | ------------------------ |
-| `GET`  | `/api/stats`      | Receiver statistics (uptime, counts)     | `ReceiverStats`          |
-| `GET`  | `/api/config`     | Get current receiver configuration       | `ReceiverConfigResponse` |
-| `PUT`  | `/api/config`     | Update receiver config (lat/lon/gain)    | `ReceiverConfigResponse` |
-| `POST` | `/api/autogain`   | Trigger automatic gain calibration       | Auto-gain result         |
+| Method | Endpoint          | Description                                       | Response Model |
+| ------ | ----------------- | -------------------------------------------------- | --------------- |
+| `GET`  | `/api/stats`      | Receiver statistics (uptime, counts)               | `ReceiverStats` |
+| `GET`  | `/api/config`     | Get current receiver configuration                 | Config dict     |
+| `PUT`  | `/api/config`     | Update receiver config (latitude/longitude only)   | Config dict     |
+| `GET`  | `/api/watchlist`  | Get the registration watchlist (**no auth required**) | Watchlist dict |
 
 ### Aircraft Database
 
-| Method | Endpoint           | Description                        | Response Model |
-| ------ | ------------------ | ---------------------------------- | -------------- |
-| `GET`  | `/api/db/status`   | Aircraft metadata DB status        | Status dict    |
-| `POST` | `/api/db/update`   | Force-refresh the aircraft DB      | Update status  |
+| Method | Endpoint           | Description                                             | Response Model |
+| ------ | ------------------ | -------------------------------------------------------- | -------------- |
+| `GET`  | `/api/db/status`   | Aircraft metadata DB status                              | Status dict    |
+| `POST` | `/api/db/update`   | Force-refresh the aircraft DB (rate-limited, see below)  | Update status  |
 
 ### Aircraft Types
 
@@ -52,12 +57,29 @@ The application supports three run modes configured via `--mode` CLI flag or the
 | `GET`  | `/api/types`          | All detected aircraft type codes   | Types list     |
 | `GET`  | `/api/types/summary`  | Aggregated type statistics         | Summary dict   |
 
-### Collectors (server mode only)
+### Collectors
 
 | Method | Endpoint                     | Description                                     | Response Model      |
 | ------ | ---------------------------- | ----------------------------------------------- | ------------------- |
 | `GET`  | `/api/collectors`            | List all currently connected remote collectors  | `CollectorInfo[]`   |
-| `GET`  | `/api/collectors/{id}`       | Get details for a specific collector            | `CollectorInfo`     |
+| `GET`  | `/api/collectors/{id}`       | Get details for a specific collector            | `CollectorInfo` or `{"error": ...}` |
+
+### Connected clients
+
+| Method | Endpoint         | Description                                     | Response Model            |
+| ------ | ---------------- | ------------------------------------------------ | ------------------------- |
+| `GET`  | `/api/clients`   | List all currently connected WebSocket clients   | `ConnectedClientInfo[]`   |
+
+### Admin (no auth required)
+
+| Method | Endpoint          | Description                                              |
+| ------ | ----------------- | --------------------------------------------------------- |
+| `GET`  | `/admin`          | Live HTML dashboard (collectors, clients, stats)          |
+| `GET`  | `/admin/stream`   | Server-Sent Events feed backing the dashboard, every 2s   |
+
+> `/api/db/update` is rate-limited to at most once every 5 minutes; requests
+> within the cooldown window return `{"status": "cooldown", "retry_after_seconds": ...}`
+> without triggering a re-download.
 
 ---
 
@@ -134,8 +156,8 @@ The application supports three run modes configured via `--mode` CLI flag or the
 | `flight_phase`         | `string`           | Yes      | `"climbing"`, `"descending"`, `"level"`, or `"on_ground"` |
 | `distance_nm`          | `float`            | Yes      | Great-circle distance from receiver in nautical miles |
 | `bearing`              | `float`            | Yes      | Bearing from receiver to aircraft in degrees (0 = North) |
-| `source_collectors`    | `string[]`         | Yes      | Collector IDs reporting this aircraft (server mode only) |
-| `nearest_collector_nm` | `float`            | Yes      | Distance from nearest reporting collector in nm (server mode only) |
+| `source_collectors`    | `string[]`         | Yes      | Collector IDs currently reporting this aircraft |
+| `nearest_collector_nm` | `float`            | Yes      | Distance from nearest reporting collector in nm |
 
 > Nullable fields populate progressively as ADS-B messages are decoded. Position fields (`latitude`, `longitude`) require CPR decoding from multiple messages and may take several seconds to appear.
 >
@@ -143,7 +165,7 @@ The application supports three run modes configured via `--mode` CLI flag or the
 >
 > **Inferred fields** are computed server-side from successive ADS-B messages and receiver geometry — they are not part of the ADS-B broadcast itself. `turn_rate` and `speed_trend` require at least two messages to compute. `distance_nm` and `bearing` require both a decoded aircraft position and a configured receiver location. `flight_phase` is derived from `vertical_rate` and `on_ground` status; vertical rates within ±100 ft/min are classified as `"level"`.
 >
-> **Multi-collector fields** (`source_collectors`, `nearest_collector_nm`) are only populated when running in server mode and receiving data from multiple collectors.
+> **Multi-collector fields** (`source_collectors`, `nearest_collector_nm`) are only populated once at least one remote collector reports the aircraft over the TCP collector protocol.
 
 ### `AircraftList`
 
@@ -181,13 +203,14 @@ The application supports three run modes configured via `--mode` CLI flag or the
 
 ### `ReceiverConfig`
 
-Used as the request body for `PUT /api/config`.
+Used as the request body for `PUT /api/config`. Only the receiver's
+position is configurable via the API — there is no tuner/gain setting since
+this server does not talk to an SDR directly (that's the collector's job).
 
 ```json
 {
   "latitude": 38.8560,
-  "longitude": -77.0495,
-  "gain": 12.5
+  "longitude": -77.0495
 }
 ```
 
@@ -195,11 +218,10 @@ Used as the request body for `PUT /api/config`.
 | ----------- | ------- | ------------------------------------ |
 | `latitude`  | `float` | Receiver latitude (decimal degrees)  |
 | `longitude` | `float` | Receiver longitude (decimal degrees) |
-| `gain`      | `float` | Tuner gain in dB                     |
 
 ### `CollectorInfo`
 
-Returned by `GET /api/collectors` (server mode only).
+Returned by `GET /api/collectors`.
 
 ```json
 {
@@ -231,29 +253,48 @@ Returned by `GET /api/collectors` (server mode only).
 
 ### `config.json`
 
+Non-secret settings, safe to commit to version control.
+
 ```json
 {
   "latitude": 38.856,
   "longitude": -77.050,
-  "gain": 7.7,
-  "mode": "standalone",
-  "collector_id": "a1b2c3d4e5f6",
-  "collector_name": "DC Metro",
-  "server_url": "ws://central-server:8080/collector/ws",
-  "api_key": "my-secret-key"
+  "http_port": 8080,
+  "collector_port": 4002,
+  "watchlist": ["N12345"]
 }
 ```
 
-| Field            | Type     | Default        | Description                                                     |
-| ---------------- | -------- | -------------- | --------------------------------------------------------------- |
-| `latitude`       | `float`  | `38.855...`    | Receiver latitude                                               |
-| `longitude`      | `float`  | `-77.049...`   | Receiver longitude                                              |
-| `gain`           | `float`  | `7.7`          | RTL-SDR tuner gain in dB                                        |
-| `mode`           | `string` | `"standalone"` | Run mode: `"standalone"`, `"collector"`, or `"server"`          |
-| `collector_id`   | `string` | auto-generated | Unique collector identifier (UUID4 hex, auto-generated if null) |
-| `collector_name` | `string` | `null`         | Human-friendly name for this collector                          |
-| `server_url`     | `string` | `null`         | Central server WebSocket URL (collector mode)                   |
-| `api_key`        | `string` | `null`         | Shared secret for collector authentication                      |
+| Field            | Type       | Default        | Description                                          |
+| ---------------- | ---------- | -------------- | ----------------------------------------------------- |
+| `latitude`       | `float`    | `38.855...`    | Receiver latitude, used for distance/bearing calcs    |
+| `longitude`      | `float`    | `-77.049...`   | Receiver longitude, used for distance/bearing calcs   |
+| `http_port`      | `integer`  | `8080`         | Port for the HTTP/WebSocket API and web UI            |
+| `collector_port` | `integer`  | `4002`         | TCP port the `CollectorHub` listens on                |
+| `watchlist`      | `string[]` | `[]`           | Registrations to highlight in the web UI (no auth required to read) |
+
+### `config.secrets.json` (gitignored)
+
+API keys live in a **separate file, excluded from git**, so they can never
+be committed by accident. Copy `config.secrets.example.json` to
+`config.secrets.json` and fill in real values.
+
+```json
+{
+  "collector_keys": ["<uuid>", "<uuid>"],
+  "client_keys": ["<uuid>", "<uuid>"]
+}
+```
+
+| Field            | Type       | Description                                        |
+| ---------------- | ---------- | --------------------------------------------------- |
+| `collector_keys` | `string[]` | Valid API keys for TCP collector connections        |
+| `client_keys`    | `string[]` | Valid API keys for REST API access (CLI/scripts)    |
+
+**Backward compatibility:** if `config.secrets.json` is absent, the server
+falls back to reading an `api_keys` block from `config.json` (older
+layout), and if that's also absent or both arrays are empty, all
+authentication is disabled (open access).
 
 ---
 
@@ -330,119 +371,87 @@ Sent when an aircraft has not been heard from in **60 seconds** and is removed f
 }
 ```
 
-##### 3. `autogain` — Gain calibration progress
+There is no `autogain` message type — this server does not drive an SDR's
+tuner gain directly (that is the collector's concern, outside this repo).
 
-Sent during an auto-gain test triggered via `POST /api/autogain`.
+---
 
-**In progress:**
+## Collector Protocol (TCP, port 4002)
+
+Collectors do **not** use a WebSocket. They open a plain TCP connection to
+`collector_port` (default `4002`) and speak a minimal line-based protocol
+handled by `CollectorHub`:
+
+```
+<host>:4002
+```
+
+### 1. Hello line (JSON, first line only)
+
+Immediately after connecting, the collector must send exactly one line of
+JSON metadata, terminated with `\n`:
 
 ```json
-{
-  "type": "autogain",
-  "phase": "testing",
-  "gain": 7.7,
-  "step": 3,
-  "total_steps": 10,
-  "results": []
-}
+{"id": "dc-metro", "name": "DC Metro Receiver", "lat": 38.856, "lon": -77.050, "api_key": "your-collector-key-here"}
 ```
 
-**Complete:**
+| Field     | Type     | Required | Description                                          |
+| --------- | -------- | -------- | ----------------------------------------------------- |
+| `id`      | `string` | Yes      | Unique collector identifier                            |
+| `name`    | `string` | No       | Human-friendly name, shown in the admin dashboard/UI   |
+| `lat`     | `float`  | No       | Collector's receiver latitude (used as CPR reference)  |
+| `lon`     | `float`  | No       | Collector's receiver longitude (used as CPR reference) |
+| `api_key` | `string` | If configured | Must match one of `config.secrets.json`'s `collector_keys` |
+
+If `api_key` is missing or invalid (and collector keys are configured), the
+server replies with a single JSON line and closes the connection:
 
 ```json
-{
-  "type": "autogain",
-  "phase": "done",
-  "gain": 12.5,
-  "step": 10,
-  "total_steps": 10,
-  "results": [
-    { "gain": 0.0, "messages": 120 },
-    { "gain": 0.9, "messages": 145 },
-    { "gain": 1.4, "messages": 160 }
-  ]
-}
+{"error": "invalid_api_key"}
 ```
 
-### Collector WebSocket — `/collector/ws` (server mode)
+If the hello line doesn't arrive within **10 seconds**, or isn't valid
+JSON, the connection is dropped.
+
+### 2. Raw hex message stream
+
+After the hello line, the collector streams raw Mode S messages — one
+uppercase or lowercase hex string per line, optionally wrapped in
+`*...;` framing (dump1090-style), 14 hex chars (56-bit / DF0,4,5,11) or 28
+hex chars (112-bit / DF16-21):
 
 ```
-ws://<server-host>:8080/collector/ws
+*8D4840D6202CC371C32CE0576098;
+8d4840d6584c5e6bfceb9d4e63bd
 ```
 
-Used by remote collectors to push aircraft data to the central server. The collector initiates the connection and sends messages; the server receives them.
+The server decodes each line with `pyModeS`, applies single-bit CRC error
+correction for DF17/18, updates the shared `AircraftStore`, and tags the
+resulting aircraft with this collector's `id` in `source_collectors`.
 
-#### Handshake
+There is no explicit `heartbeat` or `aircraft_remove` message — the server
+infers collector health from message rate (`messages_per_second`, exposed
+via `GET /api/collectors`) and prunes aircraft after the shared 60-second
+stale timeout regardless of which collector(s) reported them.
 
-The collector must send a `hello` message immediately after connecting:
+### Example collector (Python)
 
-```json
-{
-  "type": "hello",
-  "collector_id": "dc-metro",
-  "name": "DC Metro Receiver",
-  "latitude": 38.856,
-  "longitude": -77.050,
-  "api_key": "my-secret-key"
-}
+```python
+import json
+import socket
+
+sock = socket.create_connection(("central-server", 4002))
+sock.sendall((json.dumps({
+    "id": "my-collector",
+    "name": "My Receiver",
+    "lat": 38.856,
+    "lon": -77.050,
+    "api_key": "your-collector-key-here",
+}) + "\n").encode())
+
+for hex_msg in read_hex_messages_from_sdr():  # e.g. from dump1090 --net
+    sock.sendall((hex_msg + "\n").encode())
 ```
-
-The server validates the `api_key` (if configured) and registers the collector. If validation fails, the server closes the connection with code `4001`.
-
-#### Collector Message Types
-
-##### 1. `aircraft_update` — Forward aircraft state
-
-```json
-{
-  "type": "aircraft_update",
-  "collector_id": "dc-metro",
-  "aircraft": {
-    "icao": "A1B2C3",
-    "callsign": "UAL123",
-    "altitude": 35000,
-    "latitude": 38.856,
-    "longitude": -77.050
-  }
-}
-```
-
-The `aircraft` object follows the same schema as the `Aircraft` model. The server strips collector-local inferred fields (`distance_nm`, `bearing`) and recomputes them.
-
-##### 2. `aircraft_remove` — Aircraft no longer seen
-
-```json
-{
-  "type": "aircraft_remove",
-  "collector_id": "dc-metro",
-  "icao": "A1B2C3"
-}
-```
-
-Indicates the collector no longer sees this aircraft. The server removes the collector from the aircraft's `source_collectors` list. The aircraft is only fully removed when no collectors report it and the stale timeout (60s) expires.
-
-##### 3. `heartbeat` — Periodic stats
-
-```json
-{
-  "type": "heartbeat",
-  "collector_id": "dc-metro",
-  "aircraft_count": 42,
-  "messages_per_second": 13.4,
-  "timestamp": 1708099200.0
-}
-```
-
-Sent every 10 seconds. Used by the server to track collector health.
-
-#### WebSocket Close Codes
-
-| Code   | Reason               |
-| ------ | -------------------- |
-| `4000` | Expected hello       |
-| `4001` | Invalid API key      |
-| `4002` | Handshake timeout    |
-| `4003` | Not in server mode   |
 
 ---
 
@@ -455,7 +464,7 @@ Sent every 10 seconds. Used by the server to track collector health.
 | **DB auto-refresh**  | The aircraft metadata DB auto-refreshes when older than 7 days                               |
 | **Units**            | Altitude: **feet** (barometric & geometric), Speed: **knots**, Track: **degrees** (0=N), Vertical rate: **ft/min**, Coordinates: **decimal degrees** |
 | **ICAO codes**       | 24-bit hex addresses, uppercase (e.g. `A1B2C3`)                                             |
-| **Multi-collector**  | In server mode, the same aircraft seen by multiple collectors is merged — most recent data wins, `source_collectors` tracks all reporting collectors |
+| **Multi-collector**  | The same aircraft seen by multiple collectors is merged — most recent data wins, `source_collectors` tracks all reporting collectors |
 
 ---
 
@@ -489,15 +498,12 @@ curl http://localhost:8080/api/config
 # Update receiver config
 curl -X PUT http://localhost:8080/api/config \
   -H "Content-Type: application/json" \
-  -d '{"latitude": 38.856, "longitude": -77.050, "gain": 12.5}'
-
-# Trigger auto-gain
-curl -X POST http://localhost:8080/api/autogain
+  -d '{"latitude": 38.856, "longitude": -77.050}'
 
 # Check aircraft DB status
 curl http://localhost:8080/api/db/status
 
-# Force DB update
+# Force DB update (rate-limited to once every 5 minutes)
 curl -X POST http://localhost:8080/api/db/update
 
 # Get detected types
@@ -506,11 +512,17 @@ curl http://localhost:8080/api/types
 # Get type summary
 curl http://localhost:8080/api/types/summary
 
-# List connected collectors (server mode)
+# List connected collectors
 curl http://localhost:8080/api/collectors
 
 # Get a specific collector
 curl http://localhost:8080/api/collectors/dc-metro
+
+# List connected WebSocket clients
+curl http://localhost:8080/api/clients
+
+# All of the above require -H "X-API-Key: <key>" unless client_keys is
+# empty/unset in config.secrets.json.
 ```
 
 ### WebSocket (wscat)
@@ -538,9 +550,6 @@ ws.onmessage = (event) => {
       break;
     case "remove":
       removeAircraft(msg.icao);
-      break;
-    case "autogain":
-      handleAutogain(msg);
       break;
   }
 };
@@ -573,35 +582,23 @@ asyncio.run(listen())
 
 ### Collector Setup (Python)
 
+See [Collector Protocol](#collector-protocol-tcp-port-4002) — collectors
+speak plain TCP, not WebSocket:
+
 ```python
-import asyncio
 import json
-import websockets
+import socket
 
-async def collector():
-    async with websockets.connect("ws://central-server:8080/collector/ws") as ws:
-        # Send hello
-        await ws.send(json.dumps({
-            "type": "hello",
-            "collector_id": "my-collector",
-            "name": "My Receiver",
-            "latitude": 38.856,
-            "longitude": -77.050,
-            "api_key": "my-secret-key",
-        }))
+sock = socket.create_connection(("central-server", 4002))
+sock.sendall((json.dumps({
+    "id": "my-collector",
+    "name": "My Receiver",
+    "lat": 38.856,
+    "lon": -77.050,
+    "api_key": "your-collector-key-here",
+}) + "\n").encode())
 
-        # Send aircraft updates
-        await ws.send(json.dumps({
-            "type": "aircraft_update",
-            "collector_id": "my-collector",
-            "aircraft": {
-                "icao": "A1B2C3",
-                "callsign": "UAL123",
-                "altitude": 35000,
-                "latitude": 38.856,
-                "longitude": -77.050,
-            }
-        }))
-
-asyncio.run(collector())
+# Then stream raw hex Mode S messages, one per line, e.g. from dump1090's
+# --net-ro-port 30005 raw output or an RTL-SDR + pyModeS pipeline.
+sock.sendall(b"8d4840d6584c5e6bfceb9d4e63bd\n")
 ```

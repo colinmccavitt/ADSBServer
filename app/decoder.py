@@ -174,7 +174,17 @@ class Decoder:
             self._update_cpr(icao, msg, tc, result, ref_lat, ref_lon)
 
         elif tc == 28:
-            result["emergency"] = True
+            # TC 28 (Aircraft Status) covers two subtypes: ST1 is emergency/
+            # priority status (most of which report "no emergency"), ST2 is a
+            # TCAS/ACAS RA broadcast unrelated to emergencies. Treat it as an
+            # emergency only when pyModeS says the aircraft actually declared
+            # one, not just because a status message was received.
+            try:
+                result["emergency"] = pms.adsb.is_emergency(msg)
+                if result["emergency"]:
+                    result["squawk"] = pms.adsb.emergency_squawk(msg)
+            except Exception:
+                pass
 
         if len(result) > 1:
             return result

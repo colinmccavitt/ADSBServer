@@ -4,6 +4,19 @@ const aircraft = {};       // icao -> { data, marker, label, trail }
 let selectedIcao = null;
 let ws = null;
 
+// Escape untrusted strings (callsign, registration, collector name, etc.)
+// before interpolating into innerHTML — these values originate from ADS-B
+// broadcasts, remote collectors, or a third-party aircraft database, none
+// of which are trusted input.
+function escHtml(str) {
+    if (str == null) return "";
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
 // --- Watchlist ---
 let watchlist = new Set();
 
@@ -143,7 +156,7 @@ function updateAircraft(data) {
         } else {
             entry.label = L.marker(latLng, {
                 icon: L.divIcon({
-                    html: labelText,
+                    html: escHtml(labelText),
                     className: "aircraft-label",
                     iconSize: null,
                     iconAnchor: [-16, 8],
@@ -224,17 +237,17 @@ function updateSidebarItem(icao, d) {
     if (wl) el.classList.add("watchlist");
     else el.classList.remove("watchlist");
 
-    const callsign = d.callsign || "------";
+    const callsign = escHtml(d.callsign || "------");
     const alt = d.altitude != null ? d.altitude.toLocaleString() + " ft" : "---";
     const speed = d.ground_speed != null ? Math.round(d.ground_speed) + " kt" : "";
-    const typeStr = d.aircraft_type ? ` · ${d.aircraft_type}` : "";
-    const regStr = d.registration || icao;
+    const typeStr = d.aircraft_type ? ` · ${escHtml(d.aircraft_type)}` : "";
+    const regStr = escHtml(d.registration || icao);
     const badge = wl ? '<span class="watchlist-badge">&#9872; Watch</span>' : "";
 
     el.innerHTML = `
         <div class="ac-item-left">
             <div class="ac-callsign">${callsign}${typeStr}${badge}</div>
-            <div class="ac-icao">${regStr}${d.registration ? ' · ' + icao : ''}</div>
+            <div class="ac-icao">${regStr}${d.registration ? ' · ' + escHtml(icao) : ''}</div>
         </div>
         <div class="ac-item-right">
             <div class="ac-alt">${alt}</div>
@@ -513,8 +526,8 @@ async function loadCollectors() {
 
             el.innerHTML = `
                 <div class="collector-item-left">
-                    <div class="collector-name">${c.name || c.collector_id}</div>
-                    <div class="collector-id">${c.collector_id}</div>
+                    <div class="collector-name">${escHtml(c.name || c.collector_id)}</div>
+                    <div class="collector-id">${escHtml(c.collector_id)}</div>
                 </div>
                 <div class="collector-item-right">
                     <div>${c.aircraft_count} aircraft</div>
@@ -548,7 +561,7 @@ async function loadCollectors() {
 }
 
 function updateCollectorMarker(id, name, lat, lon) {
-    const label = name || id;
+    const label = escHtml(name || id);
     const icon = L.divIcon({
         html: `<svg width="20" height="20" viewBox="0 0 20 20">
             <polygon points="10,2 18,18 2,18" fill="#f59e0b" fill-opacity="0.4" stroke="#f59e0b" stroke-width="1.5"/>

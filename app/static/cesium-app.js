@@ -7,6 +7,18 @@ const aircraftMap = {};   // icao -> { data, entity, trailPositions, trailEntity
 let selectedIcao = null;
 let followMode = false;
 
+// Escape untrusted strings (callsign, registration, etc.) before
+// interpolating into innerHTML — these values originate from ADS-B
+// broadcasts or a third-party aircraft database, not trusted input.
+function escHtml(str) {
+    if (str == null) return "";
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
 // ─── Watchlist ───────────────────────────────────────────────────────────────
 let watchlist = new Set();
 
@@ -420,17 +432,17 @@ function updateSidebarItem(icao, d) {
     if (wl) el.classList.add("watchlist");
     else el.classList.remove("watchlist");
 
-    const callsign = d.callsign || "------";
+    const callsign = escHtml(d.callsign || "------");
     const alt = d.altitude != null ? d.altitude.toLocaleString() + " ft" : "---";
     const speed = d.ground_speed != null ? Math.round(d.ground_speed) + " kt" : "";
-    const typeStr = d.aircraft_type ? ` · ${d.aircraft_type}` : "";
-    const regStr = d.registration || icao;
+    const typeStr = d.aircraft_type ? ` · ${escHtml(d.aircraft_type)}` : "";
+    const regStr = escHtml(d.registration || icao);
     const badge = wl ? '<span class="watchlist-badge">&#9872; Watch</span>' : "";
 
     el.innerHTML = `
         <div class="ac-item-left">
             <div class="ac-callsign">${callsign}${typeStr}${badge}</div>
-            <div class="ac-icao">${regStr}${d.registration ? ' · ' + icao : ''}</div>
+            <div class="ac-icao">${regStr}${d.registration ? ' · ' + escHtml(icao) : ''}</div>
         </div>
         <div class="ac-item-right">
             <div class="ac-alt">${alt}</div>

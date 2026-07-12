@@ -65,7 +65,7 @@ Requests originating from the server's own web UI (detected via the `Referer` or
 
 ### Getting a client API key
 
-Client API keys are configured in the server's `config.json` under `api_keys.client_keys`. Contact the server administrator for a key.
+Client API keys are configured in the server's `config.secrets.json` (gitignored) under `client_keys`. Contact the server administrator for a key.
 
 ### Code migration examples
 
@@ -130,7 +130,7 @@ If the key is missing or invalid, the server responds with:
 
 ### Getting a collector API key
 
-Collector API keys are configured in the server's `config.json` under `api_keys.collector_keys`. Contact the server administrator for a key.
+Collector API keys are configured in the server's `config.secrets.json` (gitignored) under `collector_keys`. Contact the server administrator for a key.
 
 ---
 
@@ -214,20 +214,19 @@ The following are **not affected** by these changes:
 - **HTML pages** — `/`, `/3d`, `/admin` are served without authentication
 - **Static assets** — `/static/*` files are served without authentication
 - **Data models** — the `Aircraft`, `AircraftList`, `ReceiverStats`, and `CollectorInfo` response schemas are unchanged
-- **WebSocket message protocol** — `update`, `remove`, and `autogain` messages are unchanged
+- **WebSocket message protocol** — `update` and `remove` messages are unchanged
 
 ---
 
 ## Configuration Reference
 
-The `api_keys` section in `config.json`:
+API keys now live in `config.secrets.json` (gitignored — copy from
+`config.secrets.example.json`), **not** in `config.json`:
 
 ```json
 {
-  "api_keys": {
-    "collector_keys": ["key-1", "key-2"],
-    "client_keys": ["key-a", "key-b"]
-  }
+  "collector_keys": ["key-1", "key-2"],
+  "client_keys": ["key-a", "key-b"]
 }
 ```
 
@@ -236,4 +235,7 @@ The `api_keys` section in `config.json`:
 | `collector_keys` | `string[]` | Valid API keys for TCP collector connections      |
 | `client_keys`    | `string[]` | Valid API keys for REST API access (CLI/scripts)  |
 
-**Backward compatibility:** If the `api_keys` section is omitted or both arrays are empty, all authentication is disabled and the server behaves as before.
+**Backward compatibility:** If `config.secrets.json` is missing, the server
+falls back to an `api_keys` block embedded in `config.json` (the original
+v3.1 layout). If neither is present, or both key arrays are empty, all
+authentication is disabled and the server behaves as before.

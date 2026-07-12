@@ -22,6 +22,11 @@ HEXDB_API = "https://hexdb.io/api/v1/aircraft"
 STALE_DAYS = 7
 REFRESH_INTERVAL_SECONDS = 6 * 60 * 60  # 6 hours
 
+# Minimum time between *manually triggered* refreshes (POST /api/db/update).
+# Without this, any client holding a valid API key could repeatedly force
+# multi-megabyte downloads from adsbexchange.com.
+MANUAL_REFRESH_COOLDOWN_SECONDS = 5 * 60
+
 
 class AircraftDB:
     """Aircraft metadata database backed by a local ADS-B Exchange snapshot
@@ -34,6 +39,7 @@ class AircraftDB:
         self._meta: dict[str, Any] = {}
         self._refresh_task: asyncio.Task | None = None
         self._http: httpx.AsyncClient | None = None
+        self._last_manual_refresh: float = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -96,7 +102,23 @@ class AircraftDB:
     # ------------------------------------------------------------------
 
     async def refresh(self) -> dict[str, Any]:
-        """Force re-download and hot-reload the database. Returns status info."""
+        """Force re-download and hot-reload the database. Returns status info.
+
+        Rate-limited to at most once per ``MANUAL_REFRESH_COOLDOWN_SECONDS``
+        to prevent a client from repeatedly triggering multi-MB downloads.
+        """
+        now = time.time()
+        elapsed = now - self._last_manual_refresh
+        if elapsed < MANUAL_REFRESH_COOLDOWN_SECONDS:
+            return {
+                "status": "cooldown",
+                "message": "Manual refresh was requested too recently",
+                "retry_after_seconds": round(MANUAL_REFRESH_COOLDOWN_SECONDS - elapsed, 1),
+                "aircraft_count": len(self._db),
+                "downloaded_at": self._meta.get("downloaded_at"),
+            }
+
+        self._last_manual_refresh = now
         previous_age = self._age_days()
         await self._download()
         self._load_from_disk()

@@ -7,6 +7,7 @@ authentication is disabled for backward compatibility.
 
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import Header, HTTPException, Request
 
@@ -20,11 +21,10 @@ _client_keys: set[str] | None = None
 
 
 def _load_keys() -> None:
-    """Load API keys from the config file into module-level caches."""
+    """Load API keys from the gitignored secrets file into module-level caches."""
     global _collector_keys, _client_keys
 
-    config = cfg.load()
-    api_keys: dict[str, Any] = config.get("api_keys", {})
+    api_keys: dict[str, Any] = cfg.load_secrets()
 
     raw_collector = api_keys.get("collector_keys", [])
     raw_client = api_keys.get("client_keys", [])
@@ -85,6 +85,21 @@ def client_keys_configured() -> bool:
     return len(_client_keys) > 0
 
 
+def _same_host(header_val: str, server_host: str) -> bool:
+    """Return True if *header_val* (a Referer/Origin URL) has exactly the
+    same ``host:port`` as *server_host* (the request's own Host header).
+
+    Uses proper URL parsing rather than substring containment, which is
+    spoofable by any domain that happens to contain ``server_host`` as a
+    substring.
+    """
+    try:
+        parsed_host = urlsplit(header_val).netloc
+    except ValueError:
+        return False
+    return bool(parsed_host) and parsed_host.lower() == server_host.lower()
+
+
 async def require_api_key(
     request: Request,
     x_api_key: str | None = Header(None),
@@ -117,9 +132,13 @@ async def require_api_key(
     server_host = request.headers.get("host", "")
 
     if server_host:
-        # Accept if the referer or origin matches this server
+        # Accept only if the referer/origin's host:port exactly matches this
+        # server. A naive substring check (`server_host in header_val`) can
+        # be spoofed by any domain that merely *contains* the server's host
+        # as a substring (e.g. "server.example.com.evil.net"), so we parse
+        # the header and compare hosts exactly instead.
         for header_val in (referer, origin):
-            if header_val and server_host in header_val:
+            if header_val and _same_host(header_val, server_host):
                 return
 
     raise HTTPException(

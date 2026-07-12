@@ -1,5 +1,7 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
 websockets>=14.0
-pyModeS>=2.21
+# pyModeS 3.x is a breaking rewrite (removes the pms.df/pms.icao/pms.adsb.*
+# functional API that app/decoder.py depends on) — pin below 3.0.
+pyModeS>=2.21,<3.0
 httpx>=0.27.0

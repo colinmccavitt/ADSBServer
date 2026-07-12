@@ -1,5 +1,31 @@
+# Python / deps
 venv/
+.venv/
 __pycache__/
 *.pyc
-data/basic-ac-db.json.gz
+*.pyo
+.pytest_cache/
+node_modules/
+dist/
+build/
+
+# Local / IDE
+.cursor/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
+
+# Secrets
 .env
+config.secrets.json
+
+# Large / generated data (not source)
+data/basic-ac-db.json.gz
+data/aircraft_types.json
+data/db_meta.json
+data/*.db
+data/*.db-wal
+data/*.db-shm
+*.csv.gz
