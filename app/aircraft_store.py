@@ -31,6 +31,14 @@ VERTICAL_RATE_LEVEL_THRESHOLD = 100  # ft/min — below this is considered "leve
 # saturates the asyncio event loop and the WebSocket link to the browser.
 # We enforce a minimum interval between broadcasts for the same ICAO.
 BROADCAST_MIN_INTERVAL = 0.15   # seconds — at most ~7 broadcasts/sec per aircraft
+# Cap on how long a client may go without an `update` for a still-alive ICAO.
+# `_is_position_behind` can otherwise suppress every packet (CPR taxi jitter,
+# track-reversal) while `last_seen` keeps refreshing — clients then see a
+# ghost that never gets a `remove`, and the web UI / WOPR keep the contact
+# forever. Force a broadcast past this silence even when the position check
+# would suppress. Validated live 2026-07-12 (A7D39D: 75s+ WS silence with
+# fresh REST last_seen).
+BROADCAST_MAX_SILENCE = 5.0     # seconds
 STATS_CACHE_TTL = 1.0           # seconds to cache computed stats
 
 # ── Track-smoothing parameters ──────────────────────────────────────────────
@@ -252,13 +260,18 @@ class AircraftStore:
             self._stats_cache = None
 
             # Throttle: only serialize + broadcast if enough time has passed
-            # for this ICAO (new aircraft always broadcast immediately)
-            should_broadcast = is_new or (now_ts - self._last_broadcast.get(icao, 0)) >= BROADCAST_MIN_INTERVAL
+            # for this ICAO (new aircraft always broadcast immediately).
+            # `_last_broadcast` is last SUCCESSFUL send only — never bump it
+            # on a suppressed attempt or clients go silent while last_seen
+            # stays fresh and prune never fires.
+            last_ok = self._last_broadcast.get(icao, 0)
+            silence = now_ts - last_ok
+            should_broadcast = is_new or silence >= BROADCAST_MIN_INTERVAL
+            force_broadcast = (not is_new) and silence >= BROADCAST_MAX_SILENCE
 
             if should_broadcast:
                 ac_dict = self._aircraft[icao].model_dump(mode="json")
                 stats = self._compute_stats()
-                self._last_broadcast[icao] = now_ts
 
                 # Check _is_position_behind inside the lock so we can also
                 # reset _prev_state when suppressing.  If the smoothed position
@@ -266,15 +279,30 @@ class AircraftStore:
                 # we suppress the broadcast AND anchor _prev_state back to the
                 # high-water mark so the EMA never starts from a retreated
                 # position — that cycle is what causes the visible bouncing.
+                # force_broadcast overrides: clients must hear that the ICAO
+                # is still alive (use high-water lat/lon so we don't push a
+                # retreated jump onto the map).
                 if not is_new and self._is_position_behind(icao, ac_dict):
                     hw = self._broadcast_high_water.get(icao)
                     if hw and icao in self._prev_state:
                         self._prev_state[icao]["s_lat"] = hw.get("lat")
                         self._prev_state[icao]["s_lon"] = hw.get("lon")
-                    ac_dict = None
-                    stats = None
+                    if force_broadcast and hw:
+                        if hw.get("lat") is not None:
+                            ac_dict["smoothed_latitude"] = hw["lat"]
+                            ac_dict["latitude"] = hw["lat"]
+                        if hw.get("lon") is not None:
+                            ac_dict["smoothed_longitude"] = hw["lon"]
+                            ac_dict["longitude"] = hw["lon"]
+                        if hw.get("track") is not None:
+                            ac_dict["smoothed_track"] = hw["track"]
+                        self._last_broadcast[icao] = now_ts
+                    else:
+                        ac_dict = None
+                        stats = None
                 else:
                     self._update_broadcast_high_water(icao, ac_dict)
+                    self._last_broadcast[icao] = now_ts
             else:
                 self._dirty_aircraft.add(icao)
                 ac_dict = None
@@ -826,6 +854,8 @@ class AircraftStore:
                         if ac is None:
                             continue
                         ac_dict = ac.model_dump(mode="json")
+                        silence = now_ts - self._last_broadcast.get(icao, 0)
+                        force_broadcast = silence >= BROADCAST_MAX_SILENCE
                         if self._is_position_behind(icao, ac_dict):
                             # Anchor _prev_state to the high-water mark so the
                             # EMA doesn't start from a retreated position next
@@ -834,8 +864,20 @@ class AircraftStore:
                             if hw and icao in self._prev_state:
                                 self._prev_state[icao]["s_lat"] = hw.get("lat")
                                 self._prev_state[icao]["s_lon"] = hw.get("lon")
-                            continue
-                        self._update_broadcast_high_water(icao, ac_dict)
+                            if not force_broadcast or not hw:
+                                continue
+                            # Alive but every packet is "behind" — push the
+                            # anchored high-water pose so clients don't ghost.
+                            if hw.get("lat") is not None:
+                                ac_dict["smoothed_latitude"] = hw["lat"]
+                                ac_dict["latitude"] = hw["lat"]
+                            if hw.get("lon") is not None:
+                                ac_dict["smoothed_longitude"] = hw["lon"]
+                                ac_dict["longitude"] = hw["lon"]
+                            if hw.get("track") is not None:
+                                ac_dict["smoothed_track"] = hw["track"]
+                        else:
+                            self._update_broadcast_high_water(icao, ac_dict)
                         self._last_broadcast[icao] = now_ts
                         batch.append((icao, ac_dict))
                 for icao, ac_dict in batch:
@@ -870,7 +912,12 @@ class AircraftStore:
                 logger.exception("Error saving aircraft types")
 
     async def _prune_stale(self):
-        """Remove aircraft not seen within STALE_TIMEOUT_SECONDS."""
+        """Remove aircraft not seen within STALE_TIMEOUT_SECONDS.
+
+        Emits a `remove` per ICAO so the web UI and WOPR terminate the
+        contact; then pushes a fresh stats snapshot so the header count
+        doesn't lag behind the prune.
+        """
         now = datetime.now()
         removed = []
 
@@ -887,6 +934,11 @@ class AircraftStore:
                 self._broadcast_high_water.pop(icao, None)
                 self._dirty_aircraft.discard(icao)
                 removed.append(icao)
+            if removed:
+                self._stats_cache = None  # counts must reflect the prune
+                stats = self._compute_stats()
+            else:
+                stats = None
 
         if removed:
             logger.info("Pruned %d stale aircraft: %s", len(removed), ", ".join(removed))
@@ -903,3 +955,7 @@ class AircraftStore:
                     if client in self._clients:
                         self._clients.remove(client)
                 await self._fire_remove_callbacks(icao)
+            # Push post-prune stats so the UI count drops immediately even
+            # when no other aircraft is updating to carry a stats piggyback.
+            if stats is not None and self._clients:
+                await self.broadcast_raw({"type": "stats", "stats": stats})

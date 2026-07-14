@@ -3,9 +3,13 @@
 Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwN2NlMWNjZC03NDZkLTQyMDYtOWIwOS1iNzUzMThkMzUzZmEiLCJpZCI6MjI3NDU1LCJpYXQiOjE3NzEyOTAwMzZ9.SRMWk_kOLpiG8dxYYtRrM2YGUbHfQ9oGELkmqdrlyXk';
 
 // ─── State ───────────────────────────────────────────────────────────────────
-const aircraftMap = {};   // icao -> { data, entity, trailPositions, trailEntity }
+const aircraftMap = {};   // icao -> { data, entity, trailPositions, trailEntity, lastUpdateMs }
 let selectedIcao = null;
 let followMode = false;
+
+// Mirror the server's 60s prune with a small grace window (see app.js).
+const CLIENT_STALE_TIMEOUT_MS = 70000;
+const CLIENT_STALE_CHECK_MS = 5000;
 
 // Escape untrusted strings (callsign, registration, etc.) before
 // interpolating into innerHTML — these values originate from ADS-B
@@ -258,7 +262,7 @@ function updateAircraft(data) {
     let entry = aircraftMap[icao];
 
     if (!entry) {
-        entry = { data: data, entity: null, trailPositions: [], trailEntity: null };
+        entry = { data: data, entity: null, trailPositions: [], trailEntity: null, lastUpdateMs: Date.now() };
         aircraftMap[icao] = entry;
     } else {
         for (const key of Object.keys(data)) {
@@ -266,6 +270,7 @@ function updateAircraft(data) {
                 entry.data[key] = data[key];
             }
         }
+        entry.lastUpdateMs = Date.now();
     }
 
     const d = entry.data;
@@ -665,6 +670,8 @@ function connectWebSocket() {
             if (msg.stats) updateStats(msg.stats);
         } else if (msg.type === "remove" && msg.icao) {
             removeAircraft(msg.icao);
+        } else if (msg.type === "stats" && msg.stats) {
+            updateStats(msg.stats);
         }
     };
 
@@ -890,3 +897,14 @@ document.getElementById("cfg-autogain").addEventListener("click", async () => {
 connectWebSocket();
 loadConfig();
 loadWatchlist();
+
+// Client-side stale prune — drop entities the server should have removed.
+setInterval(() => {
+    const cutoff = Date.now() - CLIENT_STALE_TIMEOUT_MS;
+    for (const icao of Object.keys(aircraftMap)) {
+        const entry = aircraftMap[icao];
+        if (!entry || (entry.lastUpdateMs || 0) < cutoff) {
+            removeAircraft(icao);
+        }
+    }
+}, CLIENT_STALE_CHECK_MS);

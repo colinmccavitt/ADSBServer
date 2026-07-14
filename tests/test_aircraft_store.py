@@ -67,6 +67,91 @@ async def test_prune_stale_keeps_recent_aircraft(store):
     assert await store.get_by_icao("ABC123") is not None
 
 
+async def test_position_behind_force_broadcast_after_silence(store):
+    """Alive ICAOs must keep broadcasting even when every packet is 'behind'.
+
+    Regression for the ghost-aircraft bug: `_is_position_behind` used to
+    suppress forever while `last_seen` kept refreshing, so clients never
+    got `update` OR `remove`. Force-broadcast kicks in past
+    BROADCAST_MAX_SILENCE.
+    """
+    from app.aircraft_store import BROADCAST_MAX_SILENCE
+    import time
+
+    await store.update({
+        "icao": "ABC123",
+        "latitude": 40.0,
+        "longitude": -75.0,
+        "track": 0.0,
+        "ground_speed": 100.0,
+    })
+    assert "ABC123" in store._last_broadcast
+
+    # Seed a high-water mark AHEAD of the next update so the next packet
+    # looks "behind" along track.
+    store._broadcast_high_water["ABC123"] = {
+        "lat": 40.01, "lon": -75.0, "track": 0.0,
+    }
+    # Pretend we haven't successfully broadcast in a long time.
+    aged = time.time() - (BROADCAST_MAX_SILENCE + 1.0)
+    store._last_broadcast["ABC123"] = aged
+
+    received = []
+    store.on_update(lambda ac: received.append(ac["icao"]))
+
+    await store.update({
+        "icao": "ABC123",
+        "latitude": 40.0,       # south of high-water → behind for track=0
+        "longitude": -75.0,
+        "track": 0.0,
+        "ground_speed": 100.0,
+    })
+
+    assert received == ["ABC123"], "force-broadcast must fire after silence"
+    assert store._last_broadcast["ABC123"] > aged, "successful send must refresh last_broadcast"
+
+
+async def test_last_broadcast_not_bumped_on_suppressed_attempt(store):
+    """A position-behind suppress must NOT refresh `_last_broadcast`.
+
+    Otherwise the throttle thinks we just sent and clients go silent while
+    last_seen stays fresh — prune never fires for the web UI / WOPR.
+    """
+    import time
+    from app.aircraft_store import BROADCAST_MIN_INTERVAL
+
+    await store.update({
+        "icao": "ABC123",
+        "latitude": 40.0,
+        "longitude": -75.0,
+        "track": 0.0,
+        "ground_speed": 100.0,
+    })
+    # Recent successful broadcast — force path must NOT trigger, but the
+    # min-interval throttle must allow another attempt so we exercise the
+    # suppress path (not the dirty-set short-circuit).
+    store._last_broadcast["ABC123"] = time.time() - (BROADCAST_MIN_INTERVAL + 0.05)
+    stamped = store._last_broadcast["ABC123"]
+    store._broadcast_high_water["ABC123"] = {
+        "lat": 40.01, "lon": -75.0, "track": 0.0,
+    }
+
+    received = []
+    store.on_update(lambda ac: received.append(ac["icao"]))
+
+    await store.update({
+        "icao": "ABC123",
+        "latitude": 40.0,
+        "longitude": -75.0,
+        "track": 0.0,
+        "ground_speed": 100.0,
+    })
+
+    assert received == [], "behind packet within silence window must stay suppressed"
+    assert store._last_broadcast["ABC123"] == stamped, \
+        "suppressed attempt must not bump last_broadcast"
+
+
 # ---------------------------------------------------------------------
 # Flight phase classification
 # ---------------------------------------------------------------------

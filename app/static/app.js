@@ -1,8 +1,14 @@
 // ADSB Server - Map & WebSocket client
 
-const aircraft = {};       // icao -> { data, marker, label, trail }
+const aircraft = {};       // icao -> { data, marker, label, trail, lastUpdateMs }
 let selectedIcao = null;
 let ws = null;
+
+// Mirror the server's 60s prune with a small grace window. Safety net when
+// a `remove` WS frame is dropped or a broadcast blackout left a ghost on
+// the map after the server already forgot the ICAO.
+const CLIENT_STALE_TIMEOUT_MS = 70000;
+const CLIENT_STALE_CHECK_MS = 5000;
 
 // Escape untrusted strings (callsign, registration, collector name, etc.)
 // before interpolating into innerHTML — these values originate from ADS-B
@@ -103,7 +109,7 @@ function updateAircraft(data) {
     let entry = aircraft[icao];
 
     if (!entry) {
-        entry = { data: data, marker: null, label: null, trail: [] };
+        entry = { data: data, marker: null, label: null, trail: [], lastUpdateMs: Date.now() };
         aircraft[icao] = entry;
     } else {
         // Merge fields (keep old values where new ones are null)
@@ -112,6 +118,7 @@ function updateAircraft(data) {
                 entry.data[key] = data[key];
             }
         }
+        entry.lastUpdateMs = Date.now();
     }
 
     const d = entry.data;
@@ -403,6 +410,8 @@ function connectWebSocket() {
             if (msg.stats) updateStats(msg.stats);
         } else if (msg.type === "remove" && msg.icao) {
             removeAircraft(msg.icao);
+        } else if (msg.type === "stats" && msg.stats) {
+            updateStats(msg.stats);
         }
     };
 
@@ -589,6 +598,18 @@ function updateCollectorMarker(id, name, lat, lon) {
 
 // Poll collectors every 10 seconds (only relevant in server mode)
 setInterval(loadCollectors, 10000);
+
+// Client-side stale prune — terminate map markers the server should have
+// removed. Complements the server's 60s STALE_TIMEOUT_SECONDS + `remove`.
+setInterval(() => {
+    const cutoff = Date.now() - CLIENT_STALE_TIMEOUT_MS;
+    for (const icao of Object.keys(aircraft)) {
+        const entry = aircraft[icao];
+        if (!entry || (entry.lastUpdateMs || 0) < cutoff) {
+            removeAircraft(icao);
+        }
+    }
+}, CLIENT_STALE_CHECK_MS);
 
 // --- Init ---
 connectWebSocket();
