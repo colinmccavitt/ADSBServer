@@ -320,6 +320,86 @@ async def list_clients():
 # WebSocket — browser clients
 # ===========================================================================
 
+@app.websocket("/ingest")
+async def ingest_endpoint(ws: WebSocket):
+    """Structured-push ingest for collectors that already have attitude.
+
+    Unlike the raw-hex TCP hub (port 4002), collectors here open a WebSocket
+    and stream **already-decoded, attitude-baked** aircraft snapshots as JSON.
+    The server stores them verbatim (``preprocessed=True``, no re-derivation,
+    no filtering) and serves them on ``/api/aircraft`` + ``/ws`` alongside
+    hex-decoded contacts. ADSBCollector does not use this path in production —
+    it only relays raw hex; the live WOPR5000 pipeline is a raw passthrough.
+
+    Protocol:
+      1. First message: JSON hello ``{"id","name","lat","lon","api_key"}``.
+         Rejected with ``{"error":"invalid_api_key"}`` + close if the key is bad.
+      2. Then stream aircraft updates as JSON text frames. Each frame may be:
+         - a single aircraft object (``{"icao": ...}``),
+         - ``{"type":"update","aircraft":{...}}`` (mirrors the browser feed), or
+         - a batch: a JSON array of aircraft objects, or
+           ``{"aircraft":[...]}``.
+    """
+    await ws.accept()
+    collector_id: str | None = None
+    conn = None
+    try:
+        hello_raw = await ws.receive_text()
+        try:
+            hello = json.loads(hello_raw)
+        except json.JSONDecodeError:
+            await ws.send_json({"error": "invalid_hello"})
+            await ws.close()
+            return
+
+        if not auth.validate_collector_key(hello.get("api_key")):
+            await ws.send_json({"error": "invalid_api_key"})
+            await ws.close()
+            return
+
+        collector_id = hello.get("id", "pushed")
+        if collector_hub is not None:
+            conn = await collector_hub.register_pushed_collector(hello)
+        await ws.send_json({"ok": True, "id": collector_id})
+
+        while True:
+            raw = await ws.receive_text()
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            for ac in _iter_ingest_aircraft(payload):
+                if not isinstance(ac, dict) or "icao" not in ac:
+                    continue
+                if conn is not None:
+                    conn.record_message()
+                await store.update(
+                    dict(ac), source_collector=collector_id, preprocessed=True
+                )
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.exception("Error in ingest connection %s", collector_id or "?")
+    finally:
+        if collector_id and collector_hub is not None:
+            await collector_hub.unregister_pushed_collector(collector_id)
+            store.remove_collector_source(collector_id)
+
+
+def _iter_ingest_aircraft(payload):
+    """Yield aircraft dicts from any supported ingest frame shape."""
+    if isinstance(payload, list):
+        yield from payload
+    elif isinstance(payload, dict):
+        if isinstance(payload.get("aircraft"), list):
+            yield from payload["aircraft"]
+        elif isinstance(payload.get("aircraft"), dict):
+            yield payload["aircraft"]
+        else:
+            yield payload
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     """WebSocket endpoint for real-time aircraft updates."""

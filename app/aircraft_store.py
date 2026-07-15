@@ -31,29 +31,7 @@ VERTICAL_RATE_LEVEL_THRESHOLD = 100  # ft/min — below this is considered "leve
 # saturates the asyncio event loop and the WebSocket link to the browser.
 # We enforce a minimum interval between broadcasts for the same ICAO.
 BROADCAST_MIN_INTERVAL = 0.15   # seconds — at most ~7 broadcasts/sec per aircraft
-# Cap on how long a client may go without an `update` for a still-alive ICAO.
-# `_is_position_behind` can otherwise suppress every packet (CPR taxi jitter,
-# track-reversal) while `last_seen` keeps refreshing — clients then see a
-# ghost that never gets a `remove`, and the web UI / WOPR keep the contact
-# forever. Force a broadcast past this silence even when the position check
-# would suppress. Validated live 2026-07-12 (A7D39D: 75s+ WS silence with
-# fresh REST last_seen).
-BROADCAST_MAX_SILENCE = 5.0     # seconds
 STATS_CACHE_TTL = 1.0           # seconds to cache computed stats
-
-# ── Track-smoothing parameters ──────────────────────────────────────────────
-# Smoothed inferred fields use an Exponential Moving Average (EMA) to dampen
-# jitter caused by stale / out-of-order ADS-B packets.  When the raw value
-# deviates significantly from the dead-reckoned prediction, we assume the
-# packet is stale and lower the EMA weight so the smoothed value barely moves.
-SMOOTHING_ALPHA = 0.7           # EMA weight for normal updates (higher = more responsive)
-OUTLIER_ALPHA = 0.15            # EMA weight for suspected stale/outlier packets
-GROUND_STATIONARY_ALPHA = 0.05  # Very low EMA weight for stopped on-ground aircraft
-GROUND_STATIONARY_KTS = 5.0     # Speed below which a ground aircraft is considered stationary
-TRACK_OUTLIER_DEG = 25.0        # Track deviation from prediction to flag as outlier (°)
-SPEED_OUTLIER_KTS = 40.0        # Speed deviation from prediction to flag as outlier (kt)
-POSITION_OUTLIER_NM = 1.5       # Position deviation from dead-reckoned prediction (nm)
-SMOOTHING_RESET_SECONDS = 30    # Reset smoothing state after a gap this long
 
 # Type alias for update/remove callbacks
 UpdateCallback = Callable[[dict], Any]   # receives aircraft dict
@@ -102,9 +80,6 @@ class AircraftStore:
 
         # Multi-collector tracking: ICAO -> set of collector IDs reporting it
         self._source_collectors: dict[str, set[str]] = {}
-
-        # Most-forward broadcast position per ICAO (prevents backward jumps)
-        self._broadcast_high_water: dict[str, dict[str, float | None]] = {}
 
         # Broadcast throttling — per-ICAO rate limiting
         self._last_broadcast: dict[str, float] = {}
@@ -164,26 +139,35 @@ class AircraftStore:
             except Exception:
                 logger.debug("on_remove callback error", exc_info=True)
 
-    async def update(self, data: dict[str, Any], source_collector: str | None = None):
+    async def update(
+        self,
+        data: dict[str, Any],
+        source_collector: str | None = None,
+        preprocessed: bool = False,
+    ):
         """Update an aircraft's state with new data.
 
         Args:
             data: Dict with at least an ``icao`` key plus optional ADS-B fields.
             source_collector: If provided, tags this aircraft with the reporting
                 collector ID (used by the central server for multi-source merging).
+            preprocessed: When True the collector already decoded and baked
+                attitude (roll/pitch/gamma) at ingest time — not display
+                filtering, just a richer decode. Kinematics (lat/lon/track/
+                speed/altitude) are never snapped, EMA'd, or otherwise
+                filtered anywhere in this pipeline, preprocessed or not.
         """
-        icao = data.pop("icao")
+        icao = str(data.pop("icao")).upper()
+        if preprocessed:
+            data.setdefault("preprocessed", True)
         has_position = "latitude" in data and "longitude" in data
         now = datetime.now()
         now_ts = time.time()
         is_new = False
 
-        # Snap altitude to nearest 25 ft — ADS-B quantization is 25 ft anyway,
-        # and raw decoded values oscillate between brackets producing visual noise.
-        if "altitude" in data and data["altitude"] is not None:
-            data["altitude"] = round(data["altitude"] / 25) * 25
-        if "alt_geom" in data and data["alt_geom"] is not None:
-            data["alt_geom"] = round(data["alt_geom"] / 25) * 25
+        # Live Mode-S truth: do NOT snap altitude to 25 ft, or filter/smooth
+        # any kinematics. This server and every downstream client (WOPR)
+        # display the feed exactly as received.
 
         # On-ground aircraft: clamp altitude to 0.  Barometric pressure at low
         # elevations can produce slightly negative Gillham-code altitudes (e.g.
@@ -203,6 +187,11 @@ class AircraftStore:
                 update_fields = {k: v for k, v in data.items() if v is not None}
                 update_fields["last_seen"] = now
                 update_fields["message_count"] = ac.message_count + 1
+                # Position clock: advances ONLY with an actual position decode.
+                # last_seen advances on every message (velocity/squawk/altitude),
+                # which makes it useless for downstream position-rate checks.
+                if update_fields.get("latitude") is not None and update_fields.get("longitude") is not None:
+                    update_fields["position_updated"] = now
 
                 # Clamp negative altitudes for aircraft known to be on the ground.
                 # DF4/16/20 surveillance replies carry only altitude (no on_ground flag),
@@ -214,7 +203,12 @@ class AircraftStore:
                     if update_fields.get("alt_geom") is not None and update_fields["alt_geom"] < 0:
                         update_fields["alt_geom"] = 0
 
-                inferred = self._compute_inferred(icao, ac, update_fields, now_ts)
+                if preprocessed:
+                    inferred = self._compute_inferred_preprocessed(
+                        icao, ac, update_fields, now_ts
+                    )
+                else:
+                    inferred = self._compute_inferred(icao, ac, update_fields, now_ts)
                 update_fields.update(inferred)
 
                 if icao in self._source_collectors:
@@ -226,6 +220,8 @@ class AircraftStore:
                 extra: dict[str, Any] = {}
                 if icao in self._source_collectors:
                     extra["source_collectors"] = sorted(self._source_collectors[icao])
+                if non_none.get("latitude") is not None and non_none.get("longitude") is not None:
+                    extra["position_updated"] = now
                 ac_obj = Aircraft(
                     icao=icao,
                     first_seen=now,
@@ -244,10 +240,6 @@ class AircraftStore:
                     "track": ac_obj.track,
                     "ground_speed": ac_obj.ground_speed,
                     "ts": now_ts,
-                    "s_track": ac_obj.smoothed_track,
-                    "s_speed": ac_obj.smoothed_ground_speed,
-                    "s_lat": ac_obj.smoothed_latitude,
-                    "s_lon": ac_obj.smoothed_longitude,
                 }
 
             self._messages_total += 1
@@ -260,49 +252,17 @@ class AircraftStore:
             self._stats_cache = None
 
             # Throttle: only serialize + broadcast if enough time has passed
-            # for this ICAO (new aircraft always broadcast immediately).
-            # `_last_broadcast` is last SUCCESSFUL send only — never bump it
-            # on a suppressed attempt or clients go silent while last_seen
-            # stays fresh and prune never fires.
+            # for this ICAO (new aircraft always broadcast immediately). No
+            # other suppression — every accepted raw update reaches clients
+            # verbatim, backward jumps and all (Mode-S truth contract).
             last_ok = self._last_broadcast.get(icao, 0)
             silence = now_ts - last_ok
             should_broadcast = is_new or silence >= BROADCAST_MIN_INTERVAL
-            force_broadcast = (not is_new) and silence >= BROADCAST_MAX_SILENCE
 
             if should_broadcast:
                 ac_dict = self._aircraft[icao].model_dump(mode="json")
                 stats = self._compute_stats()
-
-                # Check _is_position_behind inside the lock so we can also
-                # reset _prev_state when suppressing.  If the smoothed position
-                # retreated behind the high-water mark (stale / outlier packet)
-                # we suppress the broadcast AND anchor _prev_state back to the
-                # high-water mark so the EMA never starts from a retreated
-                # position — that cycle is what causes the visible bouncing.
-                # force_broadcast overrides: clients must hear that the ICAO
-                # is still alive (use high-water lat/lon so we don't push a
-                # retreated jump onto the map).
-                if not is_new and self._is_position_behind(icao, ac_dict):
-                    hw = self._broadcast_high_water.get(icao)
-                    if hw and icao in self._prev_state:
-                        self._prev_state[icao]["s_lat"] = hw.get("lat")
-                        self._prev_state[icao]["s_lon"] = hw.get("lon")
-                    if force_broadcast and hw:
-                        if hw.get("lat") is not None:
-                            ac_dict["smoothed_latitude"] = hw["lat"]
-                            ac_dict["latitude"] = hw["lat"]
-                        if hw.get("lon") is not None:
-                            ac_dict["smoothed_longitude"] = hw["lon"]
-                            ac_dict["longitude"] = hw["lon"]
-                        if hw.get("track") is not None:
-                            ac_dict["smoothed_track"] = hw["track"]
-                        self._last_broadcast[icao] = now_ts
-                    else:
-                        ac_dict = None
-                        stats = None
-                else:
-                    self._update_broadcast_high_water(icao, ac_dict)
-                    self._last_broadcast[icao] = now_ts
+                self._last_broadcast[icao] = now_ts
             else:
                 self._dirty_aircraft.add(icao)
                 ac_dict = None
@@ -325,84 +285,8 @@ class AircraftStore:
     # Smoothing helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _ema(alpha: float, new_val: float, prev_val: float, *, is_angle: bool = False) -> float:
-        """Exponential moving average.  Handles 360° wrapping when *is_angle* is True."""
-        if is_angle:
-            delta = (new_val - prev_val + 540) % 360 - 180
-            return (prev_val + alpha * delta) % 360
-        return prev_val + alpha * (new_val - prev_val)
-
-    @staticmethod
-    def _dead_reckon(lat: float, lon: float, track_deg: float, speed_kts: float, dt: float) -> tuple[float, float]:
-        """Forward-project a position given heading, speed, and elapsed time.
-
-        Uses flat-earth approximation (accurate for the short distances involved).
-        Returns (predicted_lat, predicted_lon).
-        """
-        dist_nm = (speed_kts / 3600) * dt
-        track_rad = math.radians(track_deg)
-        lat_rad = math.radians(lat)
-        dlat = dist_nm * math.cos(track_rad) / 60           # 1° lat ≈ 60 nm
-        dlon = dist_nm * math.sin(track_rad) / (60 * max(math.cos(lat_rad), 1e-6))
-        return lat + dlat, lon + dlon
-
-    @staticmethod
-    def _flat_distance_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """Fast flat-earth distance in nautical miles (good for < ~50 nm)."""
-        dlat = (lat2 - lat1) * 60
-        dlon = (lon2 - lon1) * 60 * math.cos(math.radians((lat1 + lat2) / 2))
-        return math.sqrt(dlat * dlat + dlon * dlon)
-
     # ------------------------------------------------------------------
-    # Broadcast high-water mark (prevents backward position jumps)
-    # ------------------------------------------------------------------
-
-    def _is_position_behind(self, icao: str, ac_dict: dict) -> bool:
-        """Return True if the smoothed position in *ac_dict* is behind the
-        most-forward broadcast position for this aircraft.
-
-        "Behind" is measured as a negative displacement along the track
-        direction of the high-water mark.  This suppresses stale or
-        out-of-order packets that would visually drag the aircraft backward.
-        """
-        hw = self._broadcast_high_water.get(icao)
-        if hw is None:
-            return False
-
-        new_lat = ac_dict.get("smoothed_latitude") or ac_dict.get("latitude")
-        new_lon = ac_dict.get("smoothed_longitude") or ac_dict.get("longitude")
-        if new_lat is None or new_lon is None:
-            return False
-
-        hw_lat = hw["lat"]
-        hw_lon = hw["lon"]
-        hw_track = hw["track"]
-        if hw_lat is None or hw_lon is None or hw_track is None:
-            return False
-
-        dlat = (new_lat - hw_lat) * 60  # nm (1° lat ≈ 60 nm)
-        dlon = (new_lon - hw_lon) * 60 * math.cos(math.radians((hw_lat + new_lat) / 2))
-
-        if dlat * dlat + dlon * dlon < 1e-6:
-            return False
-
-        track_rad = math.radians(hw_track)
-        forward = dlat * math.cos(track_rad) + dlon * math.sin(track_rad)
-        return forward < 0
-
-    def _update_broadcast_high_water(self, icao: str, ac_dict: dict):
-        """Record the most-forward broadcast position for *icao*."""
-        lat = ac_dict.get("smoothed_latitude") or ac_dict.get("latitude")
-        lon = ac_dict.get("smoothed_longitude") or ac_dict.get("longitude")
-        track = ac_dict.get("smoothed_track") or ac_dict.get("track")
-        if lat is not None and lon is not None:
-            self._broadcast_high_water[icao] = {
-                "lat": lat, "lon": lon, "track": track,
-            }
-
-    # ------------------------------------------------------------------
-    # Inferred-field computation (including smoothing)
+    # Inferred-field computation
     # ------------------------------------------------------------------
 
     def _compute_inferred(
@@ -410,11 +294,9 @@ class AircraftStore:
     ) -> dict[str, Any]:
         """Compute inferred fields by comparing previous and current state.
 
-        This also produces *smoothed* variants of track, ground speed, and
-        position.  The smoothing uses an adaptive-alpha EMA: when the incoming
-        raw value deviates significantly from a dead-reckoned prediction, we
-        treat the packet as stale and lower its EMA weight so the smoothed
-        output barely moves.
+        Live Mode-S path: no filtering, no smoothing. Computes turn_rate,
+        speed_trend, flight_phase, distance/bearing, and alt_geom enrichment
+        purely from the raw values, plus this receiver's own geometry.
 
         Must be called while holding self._lock.
         """
@@ -443,13 +325,6 @@ class AircraftStore:
                     delta_speed = cur_speed - prev["ground_speed"]
                     inferred["speed_trend"] = round(delta_speed / dt, 2)
 
-        # ── Smoothed fields ──────────────────────────────────────────────
-        smoothed = self._compute_smoothed(
-            prev, now_ts, cur_track, cur_speed, cur_lat, cur_lon,
-            on_ground=cur_on_ground,
-        )
-        inferred.update(smoothed)
-
         # Flight phase (instantaneous, no history needed)
         inferred["flight_phase"] = self._classify_flight_phase(cur_vr, cur_on_ground)
 
@@ -467,11 +342,42 @@ class AircraftStore:
             "track": cur_track,
             "ground_speed": cur_speed,
             "ts": now_ts,
-            # Smoothed state carried forward
-            "s_track": inferred.get("smoothed_track"),
-            "s_speed": inferred.get("smoothed_ground_speed"),
-            "s_lat": inferred.get("smoothed_latitude"),
-            "s_lon": inferred.get("smoothed_longitude"),
+        }
+
+        return inferred
+
+    def _compute_inferred_preprocessed(
+        self, icao: str, ac: Aircraft, update_fields: dict, now_ts: float
+    ) -> dict[str, Any]:
+        """Inferred-field path for **preprocessed** collector feeds.
+
+        The collector-side attitude bake is a decode-time enrichment, not
+        display filtering — we do NOT re-derive or smooth anything server-side.
+        We still compute purely server-side geometry (distance, bearing,
+        flight phase) because those depend on this receiver's location.
+        Geometric altitude and attitude (``alt_geom``, ``heading``, ``roll_deg``,
+        ``pitch_deg``, ``gamma_deg``) arrive baked and are stored as-is.
+
+        Must be called while holding self._lock.
+        """
+        inferred: dict[str, Any] = {}
+
+        cur_vr = update_fields.get("vertical_rate", ac.vertical_rate)
+        cur_on_ground = update_fields.get("on_ground", ac.on_ground)
+        cur_lat = update_fields.get("latitude", ac.latitude)
+        cur_lon = update_fields.get("longitude", ac.longitude)
+
+        inferred["flight_phase"] = self._classify_flight_phase(cur_vr, cur_on_ground)
+
+        dist, brg = self._distance_bearing(cur_lat, cur_lon)
+        if dist is not None:
+            inferred["distance_nm"] = dist
+            inferred["bearing"] = brg
+
+        self._prev_state[icao] = {
+            "track": update_fields.get("track", ac.track),
+            "ground_speed": update_fields.get("ground_speed", ac.ground_speed),
+            "ts": now_ts,
         }
 
         return inferred
@@ -502,102 +408,6 @@ class AircraftStore:
 
         return result
 
-    def _compute_smoothed(
-        self,
-        prev: dict[str, Any] | None,
-        now_ts: float,
-        cur_track: float | None,
-        cur_speed: float | None,
-        cur_lat: float | None,
-        cur_lon: float | None,
-        on_ground: bool | None = None,
-    ) -> dict[str, Any]:
-        """Produce smoothed_track, smoothed_ground_speed, smoothed_latitude,
-        smoothed_longitude using adaptive-alpha EMA + dead reckoning.
-
-        If there is no usable previous smoothed state (first message, or gap
-        too large) the raw values are returned as-is to seed the smoother.
-        """
-        result: dict[str, Any] = {}
-
-        # First message or gap too large → seed with raw values (no smoothing)
-        if prev is None:
-            if cur_track is not None:
-                result["smoothed_track"] = round(cur_track, 1)
-            if cur_speed is not None:
-                result["smoothed_ground_speed"] = round(cur_speed, 1)
-            if cur_lat is not None and cur_lon is not None:
-                result["smoothed_latitude"] = round(cur_lat, 4)
-                result["smoothed_longitude"] = round(cur_lon, 4)
-            return result
-
-        dt = now_ts - prev["ts"]
-        if dt <= 0 or dt >= SMOOTHING_RESET_SECONDS:
-            # Gap too long — reset smoother with raw values
-            if cur_track is not None:
-                result["smoothed_track"] = round(cur_track, 1)
-            if cur_speed is not None:
-                result["smoothed_ground_speed"] = round(cur_speed, 1)
-            if cur_lat is not None and cur_lon is not None:
-                result["smoothed_latitude"] = round(cur_lat, 4)
-                result["smoothed_longitude"] = round(cur_lon, 4)
-            return result
-
-        # Retrieve previous smoothed values (fall back to raw if not yet set)
-        s_track_prev = prev.get("s_track") or prev.get("track")
-        s_speed_prev = prev.get("s_speed") or prev.get("ground_speed")
-        s_lat_prev = prev.get("s_lat")
-        s_lon_prev = prev.get("s_lon")
-
-        # ── Smooth track ─────────────────────────────────────────────────
-        if cur_track is not None and s_track_prev is not None:
-            # Predict track from previous smoothed track + observed turn trend
-            prev_turn = prev.get("turn_rate") if prev.get("turn_rate") is not None else 0
-            predicted_track = (s_track_prev + prev_turn * dt) % 360
-            deviation = abs(((cur_track - predicted_track + 540) % 360) - 180)
-            alpha = OUTLIER_ALPHA if deviation > TRACK_OUTLIER_DEG else SMOOTHING_ALPHA
-            result["smoothed_track"] = round(self._ema(alpha, cur_track, s_track_prev, is_angle=True), 1)
-        elif cur_track is not None:
-            result["smoothed_track"] = round(cur_track, 1)
-
-        # ── Smooth ground speed ──────────────────────────────────────────
-        if cur_speed is not None and s_speed_prev is not None:
-            prev_trend = prev.get("speed_trend") if prev.get("speed_trend") is not None else 0
-            predicted_speed = s_speed_prev + prev_trend * dt
-            deviation = abs(cur_speed - predicted_speed)
-            alpha = OUTLIER_ALPHA if deviation > SPEED_OUTLIER_KTS else SMOOTHING_ALPHA
-            result["smoothed_ground_speed"] = round(self._ema(alpha, cur_speed, s_speed_prev), 1)
-        elif cur_speed is not None:
-            result["smoothed_ground_speed"] = round(cur_speed, 1)
-
-        # ── Smooth position (dead-reckoning blend) ───────────────────────
-        if cur_lat is not None and cur_lon is not None and s_lat_prev is not None and s_lon_prev is not None:
-            # Stationary ground aircraft: use a very low alpha to heavily damp
-            # CPR surface-decoding noise from stopped transponders.
-            is_stationary_ground = (
-                on_ground is True
-                and (cur_speed is None or cur_speed < GROUND_STATIONARY_KTS)
-            )
-            if is_stationary_ground:
-                alpha = GROUND_STATIONARY_ALPHA
-            else:
-                # Dead-reckon from previous smoothed position using smoothed heading/speed
-                dr_track = result.get("smoothed_track") or s_track_prev
-                dr_speed = result.get("smoothed_ground_speed") or s_speed_prev
-                if dr_track is not None and dr_speed is not None:
-                    pred_lat, pred_lon = self._dead_reckon(s_lat_prev, s_lon_prev, dr_track, dr_speed, dt)
-                    deviation_nm = self._flat_distance_nm(cur_lat, cur_lon, pred_lat, pred_lon)
-                    alpha = OUTLIER_ALPHA if deviation_nm > POSITION_OUTLIER_NM else SMOOTHING_ALPHA
-                else:
-                    alpha = SMOOTHING_ALPHA
-            result["smoothed_latitude"] = round(self._ema(alpha, cur_lat, s_lat_prev), 4)
-            result["smoothed_longitude"] = round(self._ema(alpha, cur_lon, s_lon_prev), 4)
-        elif cur_lat is not None and cur_lon is not None:
-            result["smoothed_latitude"] = round(cur_lat, 4)
-            result["smoothed_longitude"] = round(cur_lon, 4)
-
-        return result
-
     def _compute_inferred_initial(self, ac: Aircraft) -> dict[str, Any]:
         """Compute what inferred fields we can from a single (first) message."""
         inferred: dict[str, Any] = {}
@@ -609,17 +419,10 @@ class AircraftStore:
             inferred["distance_nm"] = dist
             inferred["bearing"] = brg
 
-        # Seed smoothed fields with raw values (no history to smooth against yet)
-        if ac.track is not None:
-            inferred["smoothed_track"] = round(ac.track, 1)
-        if ac.ground_speed is not None:
-            inferred["smoothed_ground_speed"] = round(ac.ground_speed, 1)
-        if ac.latitude is not None and ac.longitude is not None:
-            inferred["smoothed_latitude"] = round(ac.latitude, 4)
-            inferred["smoothed_longitude"] = round(ac.longitude, 4)
-
-        # WGS84 geometric altitude (first message — only if both parts are present)
-        if ac.altitude is not None and ac.alt_diff is not None:
+        # WGS84 geometric altitude (first message — only if both parts are
+        # present and the collector didn't already supply a geometric altitude,
+        # which preprocessed feeds do).
+        if ac.alt_geom is None and ac.altitude is not None and ac.alt_diff is not None:
             inferred["alt_geom"] = ac.altitude + ac.alt_diff
 
         return inferred
@@ -691,9 +494,7 @@ class AircraftStore:
             # Record the type/model in the collector
             if self._type_collector and info:
                 self._type_collector.record(info)
-            if not self._is_position_behind(icao, ac_dict):
-                self._update_broadcast_high_water(icao, ac_dict)
-                await self._broadcast(ac_dict, stats)
+            await self._broadcast(ac_dict, stats)
         except Exception:
             logger.debug("Failed to enrich aircraft %s", icao, exc_info=True)
 
@@ -854,30 +655,6 @@ class AircraftStore:
                         if ac is None:
                             continue
                         ac_dict = ac.model_dump(mode="json")
-                        silence = now_ts - self._last_broadcast.get(icao, 0)
-                        force_broadcast = silence >= BROADCAST_MAX_SILENCE
-                        if self._is_position_behind(icao, ac_dict):
-                            # Anchor _prev_state to the high-water mark so the
-                            # EMA doesn't start from a retreated position next
-                            # time, which is what causes visible bouncing.
-                            hw = self._broadcast_high_water.get(icao)
-                            if hw and icao in self._prev_state:
-                                self._prev_state[icao]["s_lat"] = hw.get("lat")
-                                self._prev_state[icao]["s_lon"] = hw.get("lon")
-                            if not force_broadcast or not hw:
-                                continue
-                            # Alive but every packet is "behind" — push the
-                            # anchored high-water pose so clients don't ghost.
-                            if hw.get("lat") is not None:
-                                ac_dict["smoothed_latitude"] = hw["lat"]
-                                ac_dict["latitude"] = hw["lat"]
-                            if hw.get("lon") is not None:
-                                ac_dict["smoothed_longitude"] = hw["lon"]
-                                ac_dict["longitude"] = hw["lon"]
-                            if hw.get("track") is not None:
-                                ac_dict["smoothed_track"] = hw["track"]
-                        else:
-                            self._update_broadcast_high_water(icao, ac_dict)
                         self._last_broadcast[icao] = now_ts
                         batch.append((icao, ac_dict))
                 for icao, ac_dict in batch:
@@ -931,7 +708,6 @@ class AircraftStore:
                 self._prev_state.pop(icao, None)
                 self._source_collectors.pop(icao, None)
                 self._last_broadcast.pop(icao, None)
-                self._broadcast_high_water.pop(icao, None)
                 self._dirty_aircraft.discard(icao)
                 removed.append(icao)
             if removed:

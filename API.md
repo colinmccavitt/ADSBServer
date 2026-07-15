@@ -11,13 +11,28 @@ http://<host>:8080
 ## Architecture
 
 This server is always a **central aggregation server**: it exposes the HTTP
-API/web UI and a raw-TCP `CollectorHub` (default port `4002`, see
-[Collector Protocol](#collector-protocol-tcp-port-4002) below) that one or
-more remote collectors connect to and stream decoded ADS-B data into. There
-is no `--mode` flag or standalone/collector split — a single process always
-does both jobs. Running with exactly one collector on the same machine looks
-and feels like a "standalone" receiver, but architecturally it's just this
-server with one collector attached.
+API/web UI and accepts data from one or more remote collectors over **two
+ingest paths**:
+
+1. **Raw-hex TCP (live Mode-S / WOPR path)** — `CollectorHub` (default port
+   `4002`, see [Collector Protocol](#collector-protocol-tcp-port-4002)).
+   Collectors stream raw Mode S hex; the server **decodes** with pyModeS and
+   stores raw kinematics (`latitude`/`longitude`/`altitude`/`alt_geom`/`track`/
+   `ground_speed`/`vertical_rate`) verbatim. No 25 ft altitude snap, no EMA,
+   no dead-reckoning, no backward-position suppression — this is a raw
+   passthrough end to end, including in WOPR's display.
+2. **Structured push (WebSocket `/ingest`)** — a collector that already has
+   computed attitude (roll/pitch/flight-path angle) for an aircraft can push
+   already-decoded JSON directly (see [Structured Push Ingest](#structured-push-ingest-websocket-ingest)).
+   The server stores these verbatim (`preprocessed: true`) — it does not
+   re-derive or filter anything. ADSBCollector does not use this path; it only
+   ever relays raw hex.
+
+Both paths feed the same shared `AircraftStore` and are served identically on
+`/api/aircraft` and `/ws`. There is no `--mode` flag or standalone/collector
+split — a single process always does both jobs. Running with exactly one
+collector on the same machine looks and feels like a "standalone" receiver, but
+architecturally it's just this server with one collector attached.
 
 ---
 
@@ -93,8 +108,10 @@ own browser UI — see [Authentication](#authentication).
   "callsign": "UAL123",
   "altitude": 35000,
   "alt_geom": 34890,
+  "geo_minus_baro": -110,
   "ground_speed": 450.5,
   "track": 270.0,
+  "heading": 268.5,
   "latitude": 38.8560,
   "longitude": -77.0495,
   "vertical_rate": -500,
@@ -102,9 +119,14 @@ own browser UI — see [Authentication](#authentication).
   "alert": false,
   "emergency": false,
   "on_ground": false,
+  "roll_deg": -12.4,
+  "pitch_deg": 2.1,
+  "gamma_deg": -3.0,
+  "preprocessed": true,
   "message_count": 42,
   "first_seen": "2026-02-16T12:00:00Z",
   "last_seen": "2026-02-16T12:05:30Z",
+  "position_updated": "2026-02-16T12:05:28Z",
   "registration": "N12345",
   "aircraft_type": "A320",
   "aircraft_model": "Airbus A320-214",
@@ -131,8 +153,10 @@ own browser UI — see [Authentication](#authentication).
 | `callsign`             | `string`           | Yes      | Flight callsign                          |
 | `altitude`             | `integer`          | Yes      | Barometric pressure altitude in feet     |
 | `alt_geom`             | `integer`          | Yes      | WGS84 geometric altitude in feet (above ellipsoid) |
+| `geo_minus_baro`       | `integer`          | Yes      | Geometric − barometric altitude in feet (GNSS-baro offset, TC 19) |
 | `ground_speed`         | `float`            | Yes      | Ground speed in knots                    |
-| `track`                | `float`            | Yes      | Track angle in degrees (0 = North)       |
+| `track`                | `float`            | Yes      | Ground track / course over ground in degrees (0 = North) |
+| `heading`              | `float`            | Yes      | Aircraft heading in degrees (0 = North, where the nose points; differs from `track` under wind/crab) |
 | `latitude`             | `float`            | Yes      | Latitude in decimal degrees              |
 | `longitude`            | `float`            | Yes      | Longitude in decimal degrees             |
 | `vertical_rate`        | `integer`          | Yes      | Vertical rate in ft/min                  |
@@ -140,9 +164,14 @@ own browser UI — see [Authentication](#authentication).
 | `alert`                | `boolean`          | Yes      | Alert flag                               |
 | `emergency`            | `boolean`          | Yes      | Emergency flag                           |
 | `on_ground`            | `boolean`          | Yes      | Whether the aircraft is on the ground    |
+| `roll_deg`             | `float`            | Yes      | Bank/roll angle in degrees (positive = right-wing-down). Provider-baked; preprocessed feeds only |
+| `pitch_deg`            | `float`            | Yes      | Body pitch angle in degrees (nose up positive). Provider-baked; preprocessed feeds only |
+| `gamma_deg`            | `float`            | Yes      | Flight-path (climb) angle in degrees. Provider-baked; preprocessed feeds only |
+| `preprocessed`         | `boolean`          | Yes      | `true` when attitude (`roll_deg`/`pitch_deg`/`gamma_deg`) was baked by the collector at decode time (server serves as-is; clients can lerp attitude directly) |
 | `message_count`        | `integer`          | No       | Total ADS-B messages received            |
 | `first_seen`           | `datetime` (ISO)   | No       | Timestamp of first detection             |
 | `last_seen`            | `datetime` (ISO)   | No       | Timestamp of most recent message         |
+| `position_updated`     | `datetime` (ISO)   | Yes      | When `latitude`/`longitude` last changed from a decoded position message. `null` until the first position decode. Use THIS (not `last_seen`, which advances on every message type) as the clock for position-rate/velocity checks. |
 | `registration`         | `string`           | Yes      | Tail number (e.g. `N12345`)             |
 | `aircraft_type`        | `string`           | Yes      | ICAO type designator (e.g. `A320`)      |
 | `aircraft_model`       | `string`           | Yes      | Full model name                          |
@@ -451,6 +480,73 @@ sock.sendall((json.dumps({
 
 for hex_msg in read_hex_messages_from_sdr():  # e.g. from dump1090 --net
     sock.sendall((hex_msg + "\n").encode())
+```
+
+---
+
+## Structured Push Ingest (WebSocket `/ingest`)
+
+For a collector that has already decoded an aircraft and computed real
+attitude (`roll_deg`, `pitch_deg`, `gamma_deg`) from its own sensor/model, the
+server exposes a WebSocket ingest that accepts already-decoded aircraft JSON
+instead of raw hex:
+
+```
+ws://<host>:8080/ingest
+```
+
+The server stores whatever arrives verbatim (`preprocessed: true`) — no
+re-derivation, no filtering, no smoothing. **ADSBCollector does not use this
+path in production** — it only ever relays raw Mode-S hex over TCP (see
+above), and the live WOPR pipeline is a raw passthrough end to end.
+
+### 1. Hello frame (JSON, first message)
+
+Identical shape to the TCP hello:
+
+```json
+{"id": "dc-metro", "name": "DC Metro Receiver", "lat": 38.856, "lon": -77.050, "api_key": "your-collector-key-here"}
+```
+
+The server replies with `{"ok": true, "id": "dc-metro"}` on success, or
+`{"error": "invalid_api_key"}` / `{"error": "invalid_hello"}` and closes the
+socket on failure. `api_key` is validated against `collector_keys` exactly like
+the TCP hub. The pushed collector then appears in `GET /api/collectors` and the
+admin dashboard alongside hex collectors.
+
+### 2. Aircraft update frames (JSON text)
+
+After the hello, stream aircraft state as JSON text frames. Any of these shapes
+are accepted:
+
+- a single aircraft object: `{"icao": "A1B2C3", "latitude": ..., ...}`
+- a browser-style envelope: `{"type": "update", "aircraft": {"icao": ...}}`
+- a batch: `[{...}, {...}]` or `{"aircraft": [{...}, {...}]}`
+
+Each aircraft object uses the **same field names and units** as the
+[`Aircraft`](#aircraft) model (feet, knots, degrees, ft/min). At minimum send
+`icao`; include `latitude`/`longitude`/`alt_geom`/`track`/`heading`/`ground_speed`
+and the baked attitude fields for a full replay-quality contact. Values are
+stored as sent — do your rounding/smoothing at the collector.
+
+### Example (Python)
+
+```python
+import json, websockets, asyncio
+
+async def push():
+    async with websockets.connect("ws://central-server:8080/ingest") as ws:
+        await ws.send(json.dumps({
+            "id": "my-collector", "name": "My Receiver",
+            "lat": 38.856, "lon": -77.050, "api_key": "your-collector-key-here",
+        }))
+        print(await ws.recv())  # {"ok": true, ...}
+        while True:
+            for ac in preprocess_current_tracks():  # already decoded + baked
+                await ws.send(json.dumps(ac))
+            await asyncio.sleep(1.0)
+
+asyncio.run(push())
 ```
 
 ---

@@ -8,6 +8,7 @@ All SDR/subprocess concerns live in the collector; this module is pure decoding.
 """
 
 import logging
+from collections import OrderedDict
 
 import pyModeS as pms
 
@@ -15,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 # Maximum distance (degrees) from receiver to accept a decoded position.
 MAX_DISTANCE_DEG = 5.0
+
+# Max aircraft tracked in the CPR reference cache. Evicted least-recently-
+# updated first (never wiped wholesale — a bulk clear would degrade position
+# decoding for every active aircraft at once; see Tickets/DEC-001).
+MAX_POSITION_REFS = 1000
 
 # ── 1-bit CRC error correction syndrome table ─────────────────────────────
 # Each single-bit error in a 112-bit Mode S message produces a unique 24-bit
@@ -42,8 +48,10 @@ class Decoder:
     for reference-based CPR decoding."""
 
     def __init__(self, db_icao_check=None):
-        # Track last known position per aircraft for reference-based decoding
-        self._last_pos: dict[str, tuple[float, float]] = {}
+        # Last known position per aircraft for reference-based decoding,
+        # LRU-ordered (most recently updated last) and bounded by
+        # MAX_POSITION_REFS with per-entry eviction.
+        self._last_pos: OrderedDict[str, tuple[float, float]] = OrderedDict()
         # Set of known ICAOs (from DF11/DF17/DF18) used to validate short messages
         self._known_icaos: set[str] = set()
         # Optional callable(icao: str) -> bool for validating ICAOs against
@@ -168,8 +176,9 @@ class Decoder:
         elif 20 <= tc <= 22:
             alt = pms.adsb.altitude(msg)
             if alt is not None:
+                # GNSS geometric altitude only — do not overwrite baro altitude
+                # so Mode-S truth keeps baro and geom as distinct channels.
                 result["alt_geom"] = alt
-                result["altitude"] = alt
             result["on_ground"] = False
             self._update_cpr(icao, msg, tc, result, ref_lat, ref_lon)
 
@@ -322,12 +331,12 @@ class Decoder:
                     result["latitude"] = round(lat, 4)
                     result["longitude"] = round(lon, 4)
                     self._last_pos[icao] = (lat, lon)
+                    self._last_pos.move_to_end(icao)
+                    if len(self._last_pos) > MAX_POSITION_REFS:
+                        self._last_pos.popitem(last=False)  # evict oldest only
                 else:
                     logger.debug(
                         "Discarding far position for %s: %.4f, %.4f", icao, lat, lon
                     )
         except Exception as e:
             logger.debug("CPR decode error for %s: %s", icao, e)
-
-        if len(self._last_pos) > 1000:
-            self._last_pos.clear()

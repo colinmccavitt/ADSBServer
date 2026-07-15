@@ -124,3 +124,29 @@ def test_known_icaos_required_for_short_messages():
     # A short message won't validate against an empty _known_icaos set and
     # no db_icao_check, so it should be rejected even if otherwise decodable.
     assert decoder._extract_validated_icao("020016A17BD867") is None
+
+
+def test_position_ref_cache_evicts_oldest_only():
+    """The CPR reference cache must evict per-entry (LRU), never wipe every
+    active aircraft's reference at once (Tickets/DEC-001)."""
+    from app.decoder import MAX_POSITION_REFS
+
+    decoder = Decoder()
+    # A real decode establishes the first (oldest) reference.
+    decoder.decode(POSITION_MSG, POSITION_REF_LAT, POSITION_REF_LON)
+    assert "40621D" in decoder._last_pos
+
+    # Fill the cache to one over the cap with synthetic references.
+    for i in range(MAX_POSITION_REFS):
+        icao = f"F{i:05X}"
+        decoder._last_pos[icao] = (POSITION_REF_LAT, POSITION_REF_LON)
+        decoder._last_pos.move_to_end(icao)
+
+    # Trigger the eviction path via a real position decode.
+    decoder.decode(POSITION_MSG, POSITION_REF_LAT, POSITION_REF_LON)
+
+    assert len(decoder._last_pos) <= MAX_POSITION_REFS + 1
+    # The re-decoded aircraft survives; only the least-recent synthetic
+    # entries are gone, and the cache was never emptied.
+    assert "40621D" in decoder._last_pos
+    assert len(decoder._last_pos) > MAX_POSITION_REFS // 2

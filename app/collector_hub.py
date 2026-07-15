@@ -91,6 +91,31 @@ class CollectorHub:
             await self._server.wait_closed()
             logger.info("Collector hub stopped")
 
+    # ------------------------------------------------------------------
+    # Pushed (structured JSON) collectors — registered by the /ingest
+    # WebSocket endpoint. They stream already-decoded aircraft snapshots
+    # instead of raw hex, but share the same connection accounting so the
+    # admin dashboard and /api/collectors treat them uniformly.
+    # ------------------------------------------------------------------
+
+    async def register_pushed_collector(self, hello: dict[str, Any]) -> _CollectorConnection:
+        """Register a structured-push collector and return its connection state."""
+        collector_id = hello.get("id", "pushed")
+        conn = _CollectorConnection(collector_id, hello)
+        async with self._lock:
+            self._collectors[collector_id] = conn
+        logger.info(
+            "Pushed collector connected: %s (%s) [%s, %s]",
+            collector_id, conn.name or "unnamed", conn.latitude, conn.longitude,
+        )
+        return conn
+
+    async def unregister_pushed_collector(self, collector_id: str) -> None:
+        """Remove a structured-push collector on disconnect."""
+        async with self._lock:
+            self._collectors.pop(collector_id, None)
+        logger.info("Pushed collector %s cleaned up", collector_id)
+
     def get_collectors(self) -> list[CollectorInfo]:
         """Return info about all currently connected collectors."""
         result = []

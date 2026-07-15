@@ -10,8 +10,10 @@ class Aircraft(BaseModel):
     callsign: Optional[str] = Field(None, description="Flight callsign (e.g. 'UAL123')")
     altitude: Optional[int] = Field(None, description="Barometric pressure altitude in feet")
     alt_geom: Optional[int] = Field(None, description="WGS84 geometric altitude in feet (above ellipsoid)")
+    geo_minus_baro: Optional[int] = Field(None, description="Geometric minus barometric altitude in feet (GNSS-baro offset, TC19)")
     ground_speed: Optional[float] = Field(None, description="Ground speed in knots")
-    track: Optional[float] = Field(None, description="Track angle in degrees (0=North)")
+    track: Optional[float] = Field(None, description="Ground track angle in degrees (0=North, course over ground)")
+    heading: Optional[float] = Field(None, description="Aircraft heading in degrees (0=North, where the nose points; may differ from track due to wind/crab)")
     latitude: Optional[float] = Field(None, description="Latitude in decimal degrees")
     longitude: Optional[float] = Field(None, description="Longitude in decimal degrees")
     vertical_rate: Optional[int] = Field(None, description="Vertical rate in ft/min")
@@ -22,6 +24,12 @@ class Aircraft(BaseModel):
     message_count: int = Field(0, description="Total messages received from this aircraft")
     first_seen: datetime = Field(default_factory=datetime.now, description="When first detected")
     last_seen: datetime = Field(default_factory=datetime.now, description="When last message received")
+    # last_seen advances on EVERY decoded message (velocity, squawk,
+    # altitude-only...), so it is the wrong clock for position-rate checks:
+    # after a gap in position decodes a fresh fix lands with a nearly-unchanged
+    # last_seen and looks like a teleport. position_updated advances ONLY when
+    # latitude/longitude actually change from a decoded position message.
+    position_updated: Optional[datetime] = Field(None, description="When the position (latitude/longitude) was last updated; null until the first position decode")
 
     # Enrichment fields (populated from aircraft database / hexdb.io)
     registration: Optional[str] = Field(None, description="Tail/registration number (e.g. 'N12345')")
@@ -40,12 +48,13 @@ class Aircraft(BaseModel):
     distance_nm: Optional[float] = Field(None, description="Distance from receiver in nautical miles")
     bearing: Optional[float] = Field(None, description="Bearing from receiver in degrees (0=North)")
 
-    # Smoothed inferred fields (EMA-filtered with dead-reckoning outlier detection
-    # to dampen jitter from stale / out-of-order packets)
-    smoothed_track: Optional[float] = Field(None, description="Smoothed track angle (degrees, 0=North)")
-    smoothed_ground_speed: Optional[float] = Field(None, description="Smoothed ground speed (knots)")
-    smoothed_latitude: Optional[float] = Field(None, description="Smoothed latitude (decimal degrees)")
-    smoothed_longitude: Optional[float] = Field(None, description="Smoothed longitude (decimal degrees)")
+    # Provider-baked attitude (computed by a preprocessing collector so live
+    # clients — e.g. WOPR5000 — can lerp orientation directly instead of
+    # re-deriving it from position. Present only on preprocessed feeds.)
+    roll_deg: Optional[float] = Field(None, description="Bank/roll angle in degrees (positive = right-wing-down)")
+    pitch_deg: Optional[float] = Field(None, description="Body pitch angle in degrees (nose up positive)")
+    gamma_deg: Optional[float] = Field(None, description="Flight-path angle in degrees (climb angle, nose up positive)")
+    preprocessed: Optional[bool] = Field(None, description="True when attitude (roll_deg/pitch_deg/gamma_deg) was baked by the collector at decode time (server serves as-is; not display filtering)")
 
     # Multi-collector fields (populated on the central server only)
     source_collectors: Optional[list[str]] = Field(None, description="Collector IDs currently reporting this aircraft")

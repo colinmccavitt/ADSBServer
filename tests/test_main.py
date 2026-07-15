@@ -126,3 +126,76 @@ def test_config_roundtrip(client, tmp_path, monkeypatch):
         assert get_resp.json()["longitude"] == 56.78
     finally:
         store.receiver_lat, store.receiver_lon = original_lat, original_lon
+
+
+# ---------------------------------------------------------------------------
+# Structured push ingest (WebSocket /ingest)
+# ---------------------------------------------------------------------------
+
+def _require_collector_key(key: str):
+    auth._client_keys = set()
+    auth._collector_keys = {key}
+
+
+def test_ingest_rejects_bad_api_key(client):
+    _require_collector_key("good-collector-key")
+    with client.websocket_connect("/ingest") as ws:
+        ws.send_json({"id": "c1", "name": "test", "lat": 0, "lon": 0,
+                      "api_key": "wrong"})
+        assert ws.receive_json() == {"error": "invalid_api_key"}
+
+
+def test_ingest_accepts_valid_hello(client):
+    _require_collector_key("good-collector-key")
+    with client.websocket_connect("/ingest") as ws:
+        ws.send_json({"id": "c1", "name": "test", "lat": 0, "lon": 0,
+                      "api_key": "good-collector-key"})
+        reply = ws.receive_json()
+        assert reply["ok"] is True
+        assert reply["id"] == "c1"
+
+
+def test_ingest_stores_preprocessed_attitude(client, monkeypatch):
+    """A pushed aircraft is stored verbatim with preprocessed attitude and
+    served on /api/aircraft — no 25 ft snap, no re-smoothing."""
+    from app.main import store
+
+    _open_access()
+    # Disable enrichment so store.update() never reaches the network.
+    monkeypatch.setattr(store, "_aircraft_db", None)
+
+    sample = {
+        "icao": "ABC123",
+        "callsign": "TEST01",
+        "altitude": 35007,          # deliberately not a 25 ft multiple
+        "alt_geom": 34897,
+        "geo_minus_baro": -110,
+        "ground_speed": 450.5,
+        "track": 270.0,
+        "heading": 268.5,
+        "latitude": 38.856,
+        "longitude": -77.0495,
+        "vertical_rate": -512,
+        "roll_deg": -12.4,
+        "pitch_deg": 2.1,
+        "gamma_deg": -3.0,
+    }
+
+    with client.websocket_connect("/ingest") as ws:
+        ws.send_json({"id": "pusher", "name": "test", "lat": 0, "lon": 0,
+                      "api_key": ""})
+        assert ws.receive_json()["ok"] is True
+        ws.send_json({"aircraft": [sample]})
+
+    resp = client.get("/api/aircraft/ABC123")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["icao"] == "ABC123"
+    assert body["preprocessed"] is True
+    # Preserved verbatim (not snapped to the nearest 25 ft).
+    assert body["altitude"] == 35007
+    assert body["heading"] == 268.5
+    assert body["roll_deg"] == -12.4
+    assert body["pitch_deg"] == 2.1
+    assert body["gamma_deg"] == -3.0
+    assert body["geo_minus_baro"] == -110
