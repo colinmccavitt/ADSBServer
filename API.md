@@ -16,11 +16,13 @@ ingest paths**:
 
 1. **Raw-hex TCP (live Mode-S / WOPR path)** — `CollectorHub` (default port
    `4002`, see [Collector Protocol](#collector-protocol-tcp-port-4002)).
-   Collectors stream raw Mode S hex; the server **decodes** with pyModeS and
-   stores raw kinematics (`latitude`/`longitude`/`altitude`/`alt_geom`/`track`/
-   `ground_speed`/`vertical_rate`) verbatim. No 25 ft altitude snap, no EMA,
-   no dead-reckoning, no backward-position suppression — this is a raw
-   passthrough end to end, including in WOPR's display.
+   Collectors stream raw Mode S hex; the server **decodes** with pyModeS
+   (authoritative for WOPR — the collector's local decode never reaches
+   clients). Accepted kinematics are stored verbatim (no 25 ft altitude snap,
+   no EMA, no dead-reckoning). CPR acceptance applies collector-aligned
+   far-from-receiver and speed-implied jump gates so glitch fixes never enter
+   the store. TC19 subtypes 3/4 publish `airspeed`/`heading`, not
+   `ground_speed`/`track`.
 2. **Structured push (WebSocket `/ingest`)** — a collector that already has
    computed attitude (roll/pitch/flight-path angle) for an aircraft can push
    already-decoded JSON directly (see [Structured Push Ingest](#structured-push-ingest-websocket-ingest)).
@@ -38,9 +40,10 @@ architecturally it's just this server with one collector attached.
 
 ## REST API Endpoints
 
-All `/api/*` endpoints require an `X-API-Key` header **unless** no client
-keys are configured (open access) or the request comes from the server's
-own browser UI — see [Authentication](#authentication).
+All `/api/*` endpoints require a valid client key **unless** no client keys
+are configured (open access). Pass `X-API-Key`, or use the `adsb_api_key`
+HttpOnly cookie set when the server serves `/` / `/3d` / `/admin` (browser
+UI). Spoofed `Host`/`Origin`/`Referer` alone is **not** accepted (AUTH-001).
 
 ### Aircraft
 
@@ -154,9 +157,10 @@ own browser UI — see [Authentication](#authentication).
 | `altitude`             | `integer`          | Yes      | Barometric pressure altitude in feet     |
 | `alt_geom`             | `integer`          | Yes      | WGS84 geometric altitude in feet (above ellipsoid) |
 | `geo_minus_baro`       | `integer`          | Yes      | Geometric − barometric altitude in feet (GNSS-baro offset, TC 19) |
-| `ground_speed`         | `float`            | Yes      | Ground speed in knots                    |
+| `ground_speed`         | `float`            | Yes      | Ground speed in knots (TC19 GS / surface) |
+| `airspeed`             | `float`            | Yes      | Airspeed in knots (TC19 AS/IAS/TAS only — never mislabeled as ground_speed) |
 | `track`                | `float`            | Yes      | Ground track / course over ground in degrees (0 = North) |
-| `heading`              | `float`            | Yes      | Aircraft heading in degrees (0 = North, where the nose points; differs from `track` under wind/crab) |
+| `heading`              | `float`            | Yes      | Nose heading in degrees (0 = North; TC19 airspeed subtypes or preprocessed ingest — differs from `track` under wind/crab) |
 | `latitude`             | `float`            | Yes      | Latitude in decimal degrees              |
 | `longitude`            | `float`            | Yes      | Longitude in decimal degrees             |
 | `vertical_rate`        | `integer`          | Yes      | Vertical rate in ft/min                  |
@@ -164,6 +168,11 @@ own browser UI — see [Authentication](#authentication).
 | `alert`                | `boolean`          | Yes      | Alert flag                               |
 | `emergency`            | `boolean`          | Yes      | Emergency flag                           |
 | `on_ground`            | `boolean`          | Yes      | Whether the aircraft is on the ground    |
+| `nav_altitude`         | `integer`          | Yes      | Autopilot-selected altitude in feet (DF17 TC 29 target state; 32 ft LSB, so e.g. 19008 ≈ 19,000 set on the panel) |
+| `nav_altitude_src`     | `string`           | Yes      | Source of `nav_altitude`: `"MCP/FCU"` (autopilot panel) or `"FMS"` |
+| `nav_heading`          | `float`            | Yes      | Autopilot-selected heading in degrees (TC 29) |
+| `nav_qnh`              | `float`            | Yes      | Altimeter barometric pressure setting (QNH) in millibars (TC 29) |
+| `nav_modes`            | `string[]`         | Yes      | Engaged autopilot modes when the TC 29 status bit is valid — subset of `["autopilot","vnav","althold","approach","lnav"]`; an empty array means the bits are valid but nothing is engaged |
 | `roll_deg`             | `float`            | Yes      | Bank/roll angle in degrees (positive = right-wing-down). Provider-baked; preprocessed feeds only |
 | `pitch_deg`            | `float`            | Yes      | Body pitch angle in degrees (nose up positive). Provider-baked; preprocessed feeds only |
 | `gamma_deg`            | `float`            | Yes      | Flight-path (climb) angle in degrees. Provider-baked; preprocessed feeds only |
@@ -195,6 +204,8 @@ own browser UI — see [Authentication](#authentication).
 > **Inferred fields** are computed server-side from successive ADS-B messages and receiver geometry — they are not part of the ADS-B broadcast itself. `turn_rate` and `speed_trend` require at least two messages to compute. `distance_nm` and `bearing` require both a decoded aircraft position and a configured receiver location. `flight_phase` is derived from `vertical_rate` and `on_ground` status; vertical rates within ±100 ft/min are classified as `"level"`.
 >
 > **Multi-collector fields** (`source_collectors`, `nearest_collector_nm`) are only populated once at least one remote collector reports the aircraft over the TCP collector protocol.
+>
+> **Target-state fields** (`nav_*`) come from DF17 TC 29 (target state & status) messages, broadcast ~1/s by most airline transponders. They describe autopilot *intent* (the altitude/heading dialed into the panel), not the current state — useful for anticipating level-offs and turns. Each field is published only when its status bit in the message marks it valid, so any subset may be present.
 
 ### `AircraftList`
 
@@ -318,12 +329,20 @@ be committed by accident. Copy `config.secrets.example.json` to
 | Field            | Type       | Description                                        |
 | ---------------- | ---------- | --------------------------------------------------- |
 | `collector_keys` | `string[]` | Valid API keys for TCP collector connections        |
-| `client_keys`    | `string[]` | Valid API keys for REST API access (CLI/scripts)    |
+| `client_keys`    | `string[]` | Valid API keys for REST API and `/ws` access (CLI/scripts/UI) |
 
 **Backward compatibility:** if `config.secrets.json` is absent, the server
 falls back to reading an `api_keys` block from `config.json` (older
 layout), and if that's also absent or both arrays are empty, all
 authentication is disabled (open access).
+
+### Authentication
+
+| Client | How to authenticate when `client_keys` is non-empty |
+| --- | --- |
+| CLI / WOPR / scripts | `X-API-Key: <client_key>` on every `/api/*` request; same header (or query not used) on `/ws` |
+| Browser UI (`/`, `/3d`, `/admin`) | Loading the HTML page sets an HttpOnly `adsb_api_key` cookie (first configured client key). Same-origin `fetch` and `/ws` send it automatically. |
+| Spoofed Origin/Referer | **Rejected** — header matching is not an auth path (AUTH-001). |
 
 ---
 
@@ -334,6 +353,10 @@ authentication is disabled (open access).
 ```
 ws://<host>:8080/ws
 ```
+
+When client keys are configured, the socket must present a valid key via
+`X-API-Key` or the `adsb_api_key` cookie before updates are streamed.
+Unauthorized sockets are closed with code `1008`.
 
 The connection is persistent. The server pushes JSON messages to all connected clients whenever aircraft state changes. No client-to-server messages are required after the initial handshake.
 

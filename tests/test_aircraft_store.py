@@ -179,3 +179,40 @@ def test_distance_bearing_due_north(store):
     dist, brg = store._distance_bearing(41.0, -75.0)
     assert dist == pytest.approx(60.0, abs=1.0)
     assert brg == pytest.approx(0.0, abs=0.5)
+
+
+async def test_nearest_collector_nm_computed(store):
+    store.set_collector_position("c1", 40.0, -75.0)
+    store.set_collector_position("c2", 41.0, -75.0)  # ~60 nm north
+    await store.update(
+        {"icao": "ABC123", "latitude": 40.0, "longitude": -75.0},
+        source_collector="c1",
+    )
+    await store.update(
+        {"icao": "ABC123", "latitude": 40.0, "longitude": -75.0},
+        source_collector="c2",
+    )
+    ac = await store.get_by_icao("ABC123")
+    assert ac is not None
+    assert set(ac.source_collectors or []) == {"c1", "c2"}
+    # Aircraft sits on c1 → nearest is ~0 nm, not the distant c2.
+    assert ac.nearest_collector_nm == pytest.approx(0.0, abs=0.1)
+
+
+async def test_remove_collector_source_refreshes_materialized_fields(store):
+    store.set_collector_position("c1", 40.0, -75.0)
+    store.set_collector_position("c2", 40.1, -75.0)
+    await store.update(
+        {"icao": "ABC123", "latitude": 40.0, "longitude": -75.0},
+        source_collector="c1",
+    )
+    await store.update(
+        {"icao": "ABC123", "latitude": 40.0, "longitude": -75.0},
+        source_collector="c2",
+    )
+    store.remove_collector_source("c1")
+    ac = await store.get_by_icao("ABC123")
+    assert ac is not None
+    assert ac.source_collectors == ["c2"]
+    assert ac.nearest_collector_nm is not None
+    assert ac.nearest_collector_nm > 0.0

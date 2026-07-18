@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from app.aircraft_db import AircraftDB
 from app.aircraft_store import AircraftStore
-from app import auth
+from app import auth  # AUTH-001: cookie session, not Origin/Referer
 from app import config as cfg
 from app.collector_hub import CollectorHub
 from app.models import AircraftList, CollectorInfo, ConnectedClientInfo, ReceiverStats
@@ -114,28 +114,31 @@ async def no_cache_static(request: Request, call_next):
 # HTML pages (no auth required)
 # ===========================================================================
 
+def _serve_html(filename: str) -> HTMLResponse:
+    """Serve an HTML page and stamp the browser session cookie (AUTH-001)."""
+    path = os.path.join(_static_dir, filename)
+    with open(path, "r") as f:
+        response = HTMLResponse(content=f.read())
+    auth.attach_browser_session_cookie(response)
+    return response
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     """Serve the 2D map UI."""
-    index_path = os.path.join(_static_dir, "index.html")
-    with open(index_path, "r") as f:
-        return HTMLResponse(content=f.read())
+    return _serve_html("index.html")
 
 
 @app.get("/3d", response_class=HTMLResponse)
 async def index_3d():
     """Serve the CesiumJS 3D tracking UI."""
-    cesium_path = os.path.join(_static_dir, "cesium.html")
-    with open(cesium_path, "r") as f:
-        return HTMLResponse(content=f.read())
+    return _serve_html("cesium.html")
 
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page():
     """Serve the admin dashboard."""
-    admin_path = os.path.join(_static_dir, "admin.html")
-    with open(admin_path, "r") as f:
-        return HTMLResponse(content=f.read())
+    return _serve_html("admin.html")
 
 
 # ===========================================================================
@@ -402,8 +405,13 @@ def _iter_ingest_aircraft(payload):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    """WebSocket endpoint for real-time aircraft updates."""
-    await ws.accept()
+    """WebSocket endpoint for real-time aircraft updates.
+
+    Requires a valid client key via ``X-API-Key`` or the ``adsb_api_key``
+    session cookie (same rules as REST) when client keys are configured.
+    """
+    if not await auth.accept_websocket_if_authorized(ws):
+        return
 
     # Determine remote address for client tracking
     remote_addr = ""

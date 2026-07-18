@@ -80,6 +80,8 @@ class AircraftStore:
 
         # Multi-collector tracking: ICAO -> set of collector IDs reporting it
         self._source_collectors: dict[str, set[str]] = {}
+        # collector_id -> (lat, lon) for nearest_collector_nm
+        self._collector_positions: dict[str, tuple[float, float]] = {}
 
         # Broadcast throttling — per-ICAO rate limiting
         self._last_broadcast: dict[str, float] = {}
@@ -213,6 +215,11 @@ class AircraftStore:
 
                 if icao in self._source_collectors:
                     update_fields["source_collectors"] = sorted(self._source_collectors[icao])
+                lat_for_nearest = update_fields.get("latitude", ac.latitude)
+                lon_for_nearest = update_fields.get("longitude", ac.longitude)
+                nearest = self._nearest_collector_nm(icao, lat_for_nearest, lon_for_nearest)
+                if nearest is not None:
+                    update_fields["nearest_collector_nm"] = nearest
 
                 self._aircraft[icao] = ac.model_copy(update=update_fields)
             else:
@@ -222,6 +229,11 @@ class AircraftStore:
                     extra["source_collectors"] = sorted(self._source_collectors[icao])
                 if non_none.get("latitude") is not None and non_none.get("longitude") is not None:
                     extra["position_updated"] = now
+                nearest = self._nearest_collector_nm(
+                    icao, non_none.get("latitude"), non_none.get("longitude")
+                )
+                if nearest is not None:
+                    extra["nearest_collector_nm"] = nearest
                 ac_obj = Aircraft(
                     icao=icao,
                     first_seen=now,
@@ -453,29 +465,9 @@ class AircraftStore:
             or self.receiver_lon is None
         ):
             return None, None
-
-        r_lat = math.radians(self.receiver_lat)
-        r_lon = math.radians(self.receiver_lon)
-        a_lat = math.radians(lat)
-        a_lon = math.radians(lon)
-        dlat = a_lat - r_lat
-        dlon = a_lon - r_lon
-
-        # Haversine distance
-        a = (
-            math.sin(dlat / 2) ** 2
-            + math.cos(r_lat) * math.cos(a_lat) * math.sin(dlon / 2) ** 2
+        return self._distance_bearing_between(
+            self.receiver_lat, self.receiver_lon, lat, lon
         )
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-        EARTH_NM = 3440.065  # Earth radius in nautical miles
-        distance = round(EARTH_NM * c, 1)
-
-        # Initial bearing (forward azimuth)
-        x = math.sin(dlon) * math.cos(a_lat)
-        y = math.cos(r_lat) * math.sin(a_lat) - math.sin(r_lat) * math.cos(a_lat) * math.cos(dlon)
-        bearing = round(math.degrees(math.atan2(x, y)) % 360, 1)
-
-        return distance, bearing
 
     async def _enrich_aircraft(self, icao: str):
         """Look up aircraft metadata and merge it into the stored aircraft."""
@@ -498,14 +490,91 @@ class AircraftStore:
         except Exception:
             logger.debug("Failed to enrich aircraft %s", icao, exc_info=True)
 
+    def set_collector_position(
+        self, collector_id: str, lat: float | None, lon: float | None
+    ) -> None:
+        """Record a collector's receiver lat/lon for nearest_collector_nm."""
+        if lat is None or lon is None:
+            self._collector_positions.pop(collector_id, None)
+            return
+        self._collector_positions[collector_id] = (float(lat), float(lon))
+
+    def _nearest_collector_nm(
+        self, icao: str, lat: float | None, lon: float | None
+    ) -> float | None:
+        """Distance (nm) from the aircraft to the nearest reporting collector."""
+        if lat is None or lon is None:
+            return None
+        sources = self._source_collectors.get(icao)
+        if not sources:
+            return None
+        best: float | None = None
+        for cid in sources:
+            pos = self._collector_positions.get(cid)
+            if pos is None:
+                continue
+            dist, _ = self._distance_bearing_between(lat, lon, pos[0], pos[1])
+            if dist is None:
+                continue
+            if best is None or dist < best:
+                best = dist
+        return best
+
+    @staticmethod
+    def _distance_bearing_between(
+        lat1: float, lon1: float, lat2: float, lon2: float
+    ) -> tuple[float | None, float | None]:
+        """Haversine nm + initial bearing between two LLA points."""
+        r_lat1 = math.radians(lat1)
+        r_lon1 = math.radians(lon1)
+        r_lat2 = math.radians(lat2)
+        r_lon2 = math.radians(lon2)
+        dlat = r_lat2 - r_lat1
+        dlon = r_lon2 - r_lon1
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(r_lat1) * math.cos(r_lat2) * math.sin(dlon / 2) ** 2
+        )
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        EARTH_NM = 3440.065
+        distance = round(EARTH_NM * c, 1)
+        x = math.sin(dlon) * math.cos(r_lat2)
+        y = (
+            math.cos(r_lat1) * math.sin(r_lat2)
+            - math.sin(r_lat1) * math.cos(r_lat2) * math.cos(dlon)
+        )
+        bearing = round(math.degrees(math.atan2(x, y)) % 360, 1)
+        return distance, bearing
+
     def remove_collector_source(self, collector_id: str):
         """Remove a collector ID from all aircraft source tracking.
 
-        Called when a collector disconnects from the server."""
+        Called when a collector disconnects from the server. Refreshes the
+        materialized ``source_collectors`` / ``nearest_collector_nm`` fields
+        immediately so clients do not see a departed collector until prune.
+        """
+        self._collector_positions.pop(collector_id, None)
+        affected: list[str] = []
         for icao, sources in list(self._source_collectors.items()):
+            if collector_id not in sources:
+                continue
             sources.discard(collector_id)
             if not sources:
                 del self._source_collectors[icao]
+            affected.append(icao)
+
+        for icao in affected:
+            ac = self._aircraft.get(icao)
+            if ac is None:
+                continue
+            srcs = sorted(self._source_collectors.get(icao, set()))
+            nearest = self._nearest_collector_nm(icao, ac.latitude, ac.longitude)
+            self._aircraft[icao] = ac.model_copy(
+                update={
+                    "source_collectors": srcs if srcs else None,
+                    "nearest_collector_nm": nearest,
+                }
+            )
 
     async def get_all(self) -> list[Aircraft]:
         """Return all currently tracked aircraft."""

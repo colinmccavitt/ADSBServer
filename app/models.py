@@ -11,9 +11,10 @@ class Aircraft(BaseModel):
     altitude: Optional[int] = Field(None, description="Barometric pressure altitude in feet")
     alt_geom: Optional[int] = Field(None, description="WGS84 geometric altitude in feet (above ellipsoid)")
     geo_minus_baro: Optional[int] = Field(None, description="Geometric minus barometric altitude in feet (GNSS-baro offset, TC19)")
-    ground_speed: Optional[float] = Field(None, description="Ground speed in knots")
+    ground_speed: Optional[float] = Field(None, description="Ground speed in knots (TC19 subtypes 1/2 or surface movement)")
+    airspeed: Optional[float] = Field(None, description="Indicated/true airspeed in knots (TC19 subtypes 3/4 only — not ground speed)")
     track: Optional[float] = Field(None, description="Ground track angle in degrees (0=North, course over ground)")
-    heading: Optional[float] = Field(None, description="Aircraft heading in degrees (0=North, where the nose points; may differ from track due to wind/crab)")
+    heading: Optional[float] = Field(None, description="Aircraft heading in degrees (0=North; from TC19 airspeed subtypes or preprocessed ingest — may differ from track due to wind/crab)")
     latitude: Optional[float] = Field(None, description="Latitude in decimal degrees")
     longitude: Optional[float] = Field(None, description="Longitude in decimal degrees")
     vertical_rate: Optional[int] = Field(None, description="Vertical rate in ft/min")
@@ -30,6 +31,15 @@ class Aircraft(BaseModel):
     # last_seen and looks like a teleport. position_updated advances ONLY when
     # latitude/longitude actually change from a decoded position message.
     position_updated: Optional[datetime] = Field(None, description="When the position (latitude/longitude) was last updated; null until the first position decode")
+
+    # Target state & status (DF17 TC29): autopilot-selected intent. Field
+    # names follow the readsb/wiki convention (nav_*). Published only when
+    # the message's status bits vouch for the value.
+    nav_altitude: Optional[int] = Field(None, description="Autopilot-selected altitude in feet (TC29; MCP/FCU or FMS source, see nav_altitude_src)")
+    nav_altitude_src: Optional[str] = Field(None, description="Source of nav_altitude: 'MCP/FCU' (autopilot panel) or 'FMS'")
+    nav_heading: Optional[float] = Field(None, description="Autopilot-selected heading in degrees (TC29)")
+    nav_qnh: Optional[float] = Field(None, description="Altimeter barometric pressure setting (QNH) in millibars (TC29)")
+    nav_modes: Optional[list[str]] = Field(None, description="Engaged autopilot modes when the TC29 status bit is valid — subset of ['autopilot','vnav','althold','approach','lnav']; empty list = bits valid, nothing engaged")
 
     # Enrichment fields (populated from aircraft database / hexdb.io)
     registration: Optional[str] = Field(None, description="Tail/registration number (e.g. 'N12345')")

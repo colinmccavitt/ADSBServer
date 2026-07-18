@@ -1,6 +1,7 @@
 """Tests for app.auth — API key validation and the require_api_key
-FastAPI dependency, including a regression test for the Origin/Referer
-substring-match bypass fixed in this pass."""
+FastAPI dependency, including AUTH-001 regression (Host/Origin spoof
+must not bypass the key requirement).
+"""
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -65,7 +66,7 @@ def test_open_access_when_no_client_keys_configured():
     assert resp.status_code == 200
 
 
-def test_rejects_request_with_no_key_and_no_matching_origin():
+def test_rejects_request_with_no_key_and_no_cookie():
     _set_keys(client_keys={"good-key"})
     client = TestClient(_make_protected_app())
     resp = client.get("/protected")
@@ -86,30 +87,50 @@ def test_rejects_wrong_x_api_key_header():
     assert resp.status_code == 401
 
 
-def test_browser_exemption_allows_exact_origin_match():
+def test_accepts_valid_session_cookie():
     _set_keys(client_keys={"good-key"})
-    client = TestClient(_make_protected_app(), base_url="http://testserver")
-    resp = client.get("/protected", headers={"Origin": "http://testserver"})
+    client = TestClient(_make_protected_app())
+    resp = client.get(
+        "/protected", cookies={auth.BROWSER_COOKIE_NAME: "good-key"}
+    )
     assert resp.status_code == 200
 
 
-def test_browser_exemption_allows_exact_referer_match():
+def test_rejects_wrong_session_cookie():
     _set_keys(client_keys={"good-key"})
-    client = TestClient(_make_protected_app(), base_url="http://testserver")
-    resp = client.get("/protected", headers={"Referer": "http://testserver/"})
-    assert resp.status_code == 200
+    client = TestClient(_make_protected_app())
+    resp = client.get(
+        "/protected", cookies={auth.BROWSER_COOKIE_NAME: "wrong-key"}
+    )
+    assert resp.status_code == 401
 
 
 @pytest.mark.parametrize("spoofed_origin", [
+    "http://testserver",
     "http://testserver.evil.net",
     "http://evil-testserver",
     "http://evil.com/?x=testserver",
 ])
-def test_substring_spoofed_origin_is_rejected(spoofed_origin):
-    """Regression test: a domain that merely *contains* the server's host
-    as a substring must NOT be treated as same-origin. Before the fix,
-    `server_host in header_val` allowed exactly this bypass."""
+def test_origin_referer_exemption_removed(spoofed_origin):
+    """AUTH-001: matching Host+Origin/Referer must NOT authorize without a key.
+
+    Before the fix, any client that set Origin to match Host bypassed
+    X-API-Key entirely. The browser UI now authenticates via the
+    ``adsb_api_key`` cookie (a real configured key), not header spoofing.
+    """
     _set_keys(client_keys={"good-key"})
     client = TestClient(_make_protected_app(), base_url="http://testserver")
-    resp = client.get("/protected", headers={"Origin": spoofed_origin})
+    resp = client.get(
+        "/protected",
+        headers={
+            "Host": "testserver",
+            "Origin": spoofed_origin,
+            "Referer": spoofed_origin + "/",
+        },
+    )
     assert resp.status_code == 401
+
+
+def test_browser_session_key_is_stable_sorted_first():
+    _set_keys(client_keys={"zeta", "alpha"})
+    assert auth.browser_session_key() == "alpha"

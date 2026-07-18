@@ -104,6 +104,9 @@ class CollectorHub:
         conn = _CollectorConnection(collector_id, hello)
         async with self._lock:
             self._collectors[collector_id] = conn
+        self._store.set_collector_position(
+            collector_id, conn.latitude, conn.longitude
+        )
         logger.info(
             "Pushed collector connected: %s (%s) [%s, %s]",
             collector_id, conn.name or "unnamed", conn.latitude, conn.longitude,
@@ -114,6 +117,7 @@ class CollectorHub:
         """Remove a structured-push collector on disconnect."""
         async with self._lock:
             self._collectors.pop(collector_id, None)
+        self._store.remove_collector_source(collector_id)
         logger.info("Pushed collector %s cleaned up", collector_id)
 
     def get_collectors(self) -> list[CollectorInfo]:
@@ -193,9 +197,19 @@ class CollectorHub:
 
             ref_lat = conn.latitude or 0.0
             ref_lon = conn.longitude or 0.0
+            if conn.latitude is None or conn.longitude is None:
+                logger.warning(
+                    "Collector %s omitted lat/lon in hello — CPR reference "
+                    "defaults to (0,0); position decodes will likely fail "
+                    "until another collector seeds the aircraft",
+                    collector_id,
+                )
 
             async with self._lock:
                 self._collectors[collector_id] = conn
+            self._store.set_collector_position(
+                collector_id, conn.latitude, conn.longitude
+            )
 
             logger.info(
                 "Collector connected: %s (%s) at [%.4f, %.4f] from %s",
