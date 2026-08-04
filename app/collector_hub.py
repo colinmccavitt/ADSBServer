@@ -2,7 +2,19 @@
 
 Listens on a dedicated TCP port. Each collector connects and:
   1. Sends a JSON hello line: {"id":"abc","name":"roof","lat":38.8,"lon":-77.0,"api_key":"..."}
-  2. Streams raw hex Mode S messages, one per line.
+  2. Receives a JSON ack line: {"ok":true,"proto":2}
+  3. Streams Mode S messages, one per line.
+
+Two feed formats are accepted on the same port:
+
+  protocol 1  ``8D4840D6202CC371C32CE0576098``      (bare hex, timed on arrival)
+  protocol 2  ``1767225600123,8D4840D6202CC371...`` (millisecond observation time)
+
+Protocol 2 exists so a roaming collector can spool messages to disk while its
+uplink is down and replay them afterwards without the hub back-dating them to
+the moment they happened to arrive. A comma is an unambiguous discriminator:
+raw Mode-S hex never contains one. Collectors that predate the ack keep working
+unchanged - they only ever looked for an ``error`` key in the reply.
 
 The hub decodes each message using pyModeS and feeds results into the
 AircraftStore, tracking which collectors are connected.
@@ -14,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -32,6 +45,72 @@ logger = logging.getLogger(__name__)
 # Cap per-ICAO store updates to prevent one loud aircraft from saturating the
 # async event loop (the decoded data is largely redundant past this rate).
 MAX_UPDATES_PER_ICAO_PER_SEC = 25
+
+# Highest feed protocol this hub understands; advertised in the hello ack.
+FEED_PROTO = 2
+
+# Bounds for a collector-supplied observation timestamp. A spooled backlog can
+# legitimately be hours old, but a wildly wrong clock (an unsynced Pi that
+# booted at the epoch) must not be trusted, or it would back-date live traffic
+# and make aircraft look permanently stale.
+MAX_TIMESTAMP_AGE_SEC = 7 * 24 * 3600
+MAX_TIMESTAMP_SKEW_SEC = 300
+
+# Idle/keepalive tuning. Without these the hub never learns that a collector
+# vanished mid-connection: the socket sits in ESTABLISHED forever, leaking an
+# fd and a stale entry in /api/collectors. Seen in the wild with 10+ sockets
+# left over from a collector that had physically moved continents.
+KEEPALIVE_IDLE_SEC = 60
+KEEPALIVE_INTVL_SEC = 15
+KEEPALIVE_COUNT = 4
+
+
+def _enable_tcp_keepalive(writer: asyncio.StreamWriter) -> None:
+    """Ask the kernel to probe idle collector connections and drop dead ones."""
+    sock = writer.get_extra_info("socket")
+    if sock is None:
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        for opt, value in (
+            ("TCP_KEEPIDLE", KEEPALIVE_IDLE_SEC),
+            ("TCP_KEEPINTVL", KEEPALIVE_INTVL_SEC),
+            ("TCP_KEEPCNT", KEEPALIVE_COUNT),
+        ):
+            # TCP_KEEPIDLE/INTVL/CNT are Linux-only; skip whatever is missing
+            # rather than losing SO_KEEPALIVE entirely on other platforms.
+            if hasattr(socket, opt):
+                sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), value)
+    except OSError:
+        logger.debug("Could not set TCP keepalive on collector socket", exc_info=True)
+
+
+def parse_feed_line(line: str, now: float) -> tuple[str, float | None]:
+    """Split a feed line into ``(hex, observed_unix_seconds_or_None)``.
+
+    Protocol 2 collectors prefix each message with the millisecond wall-clock
+    time at which they received it (``1767225600123,8D4840D6...``) so a spooled
+    backlog replays with true observation times instead of arrival times. Bare
+    protocol-1 hex has no prefix and yields ``None``, meaning "time it on
+    arrival". A comma is a safe discriminator: raw Mode-S hex never contains one.
+
+    Timestamps outside :data:`MAX_TIMESTAMP_AGE_SEC` in the past or
+    :data:`MAX_TIMESTAMP_SKEW_SEC` in the future are discarded (``None``) so a
+    misconfigured collector clock degrades to protocol-1 behaviour instead of
+    corrupting the store.
+    """
+    ts_part, sep, hex_part = line.partition(",")
+    if not sep:
+        return line, None
+    try:
+        observed = int(ts_part) / 1000.0
+    except ValueError:
+        # Not a timestamp prefix after all; treat the whole line as the message
+        # so the caller's length check rejects it.
+        return line, None
+    if observed > now + MAX_TIMESTAMP_SKEW_SEC or observed < now - MAX_TIMESTAMP_AGE_SEC:
+        return hex_part, None
+    return hex_part, observed
 
 
 class _CollectorConnection:
@@ -167,6 +246,8 @@ class CollectorHub:
         """Handle a single collector TCP connection."""
         addr = writer.get_extra_info("peername")
         collector_id: str | None = None
+        conn: _CollectorConnection | None = None
+        _enable_tcp_keepalive(writer)
 
         try:
             # Read hello line (JSON with collector metadata)
@@ -192,6 +273,14 @@ class CollectorHub:
                 await writer.drain()
                 writer.close()
                 return
+
+            # Acknowledge the hello and advertise the feed protocol. Collectors
+            # written before protocol 2 only inspect this reply for an "error"
+            # key, so it is safe for them; it also spares new collectors the
+            # 5s read timeout they used to sit through when the hub said
+            # nothing at all on success.
+            writer.write(json.dumps({"ok": True, "proto": FEED_PROTO}).encode() + b"\n")
+            await writer.drain()
 
             conn = _CollectorConnection(collector_id, hello)
 
@@ -225,6 +314,7 @@ class CollectorHub:
             _store_count = 0
             _rate_limited_count = 0
             _position_count = 0
+            _replayed_count = 0
             _icaos_seen: set[str] = set()
             _last_diag = time.time()
             _diag_interval = 30
@@ -237,11 +327,16 @@ class CollectorHub:
                 if not line_bytes:
                     break  # connection closed
 
-                hex_msg = line_bytes.decode("ascii", errors="ignore").strip()
-                if not hex_msg:
+                line = line_bytes.decode("ascii", errors="ignore").strip()
+                if not line:
                     continue
 
                 _msg_count += 1
+
+                arrival = time.time()
+                hex_msg, observed = parse_feed_line(line, arrival)
+                if observed is not None:
+                    _replayed_count += 1
 
                 if hex_msg.startswith("*") and hex_msg.endswith(";"):
                     hex_msg = hex_msg[1:-1]
@@ -261,10 +356,18 @@ class CollectorHub:
                         _position_count += 1
                     _icaos_seen.add(icao_key)
 
-                    now = time.time()
-                    if now - _last_store_update.get(icao_key, 0) >= _update_interval:
-                        _last_store_update[icao_key] = now
-                        await self._store.update(decoded, source_collector=collector_id)
+                    # Rate-limit on the message's own clock. Using wall time
+                    # here would throw away almost an entire spooled backlog,
+                    # because a replay delivers many minutes of traffic inside
+                    # a second or two of arrival time.
+                    clock = observed if observed is not None else arrival
+                    if clock - _last_store_update.get(icao_key, 0) >= _update_interval:
+                        _last_store_update[icao_key] = clock
+                        await self._store.update(
+                            decoded,
+                            source_collector=collector_id,
+                            observed_at=observed,
+                        )
                         _store_count += 1
                     else:
                         _rate_limited_count += 1
@@ -277,13 +380,14 @@ class CollectorHub:
                         "Collector %s diagnostics — "
                         "%d msgs (%.0f/s), %d decoded, %d with position, "
                         "%d failed CRC/decode, %d filtered (bad length), "
-                        "%d rate-limited, %d stored, %d unique ICAOs",
+                        "%d rate-limited, %d stored, %d unique ICAOs, "
+                        "%d timestamped/replayed",
                         collector_id,
                         _msg_count, conn.messages_per_second,
                         _decoded_count, _position_count,
                         _decode_fail_count, _filtered_count,
                         _rate_limited_count, _store_count,
-                        len(_icaos_seen),
+                        len(_icaos_seen), _replayed_count,
                     )
                     _last_diag = now
 
@@ -299,10 +403,26 @@ class CollectorHub:
             logger.exception("Error in collector connection %s", collector_id or addr)
         finally:
             if collector_id:
+                # Only tear down registration if it is still *ours*. A collector
+                # that reconnects (every WiFi handoff, for a roaming one) has
+                # already replaced this entry with its new connection, and a
+                # late-dying predecessor must not delete the live one - that
+                # silently drops a working feed off /api/collectors and unbinds
+                # its aircraft. Zombie sockets made this routine before
+                # keepalive was enabled.
                 async with self._lock:
-                    self._collectors.pop(collector_id, None)
-                self._store.remove_collector_source(collector_id)
-                logger.info("Collector %s cleaned up", collector_id)
+                    current = self._collectors.get(collector_id)
+                    superseded = current is not None and conn is not None and current is not conn
+                    if not superseded:
+                        self._collectors.pop(collector_id, None)
+                if superseded:
+                    logger.info(
+                        "Collector %s stale connection closed; live connection kept",
+                        collector_id,
+                    )
+                else:
+                    self._store.remove_collector_source(collector_id)
+                    logger.info("Collector %s cleaned up", collector_id)
             try:
                 writer.close()
                 await writer.wait_closed()

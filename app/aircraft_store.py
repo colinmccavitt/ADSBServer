@@ -146,6 +146,7 @@ class AircraftStore:
         data: dict[str, Any],
         source_collector: str | None = None,
         preprocessed: bool = False,
+        observed_at: float | None = None,
     ):
         """Update an aircraft's state with new data.
 
@@ -153,6 +154,14 @@ class AircraftStore:
             data: Dict with at least an ``icao`` key plus optional ADS-B fields.
             source_collector: If provided, tags this aircraft with the reporting
                 collector ID (used by the central server for multi-source merging).
+            observed_at: Unix seconds at which the collector actually received
+                the message, when it told us (feed protocol 2). Spooled traffic
+                replayed after an uplink outage carries its true observation
+                time, so timestamps must come from here rather than from arrival
+                time. ``None`` means "time it on arrival", the protocol-1
+                behaviour. A sample older than what is already stored for this
+                aircraft is applied without rewinding its clocks - see
+                ``stale_sample`` below.
             preprocessed: When True the collector already decoded and baked
                 attitude (roll/pitch/gamma) at ingest time — not display
                 filtering, just a richer decode. Kinematics (lat/lon/track/
@@ -163,8 +172,12 @@ class AircraftStore:
         if preprocessed:
             data.setdefault("preprocessed", True)
         has_position = "latitude" in data and "longitude" in data
-        now = datetime.now()
-        now_ts = time.time()
+        # Aircraft state is stamped with the observation time; ingest-rate
+        # metrics are stamped with arrival time, so replaying a backlog cannot
+        # push out-of-order entries into the rate windows.
+        arrival_ts = time.time()
+        now_ts = arrival_ts if observed_at is None else observed_at
+        now = datetime.fromtimestamp(now_ts)
         is_new = False
 
         # Live Mode-S truth: do NOT snap altitude to 25 ft, or filter/smooth
@@ -187,13 +200,22 @@ class AircraftStore:
             if icao in self._aircraft:
                 ac = self._aircraft[icao]
                 update_fields = {k: v for k, v in data.items() if v is not None}
-                update_fields["last_seen"] = now
                 update_fields["message_count"] = ac.message_count + 1
-                # Position clock: advances ONLY with an actual position decode.
-                # last_seen advances on every message (velocity/squawk/altitude),
-                # which makes it useless for downstream position-rate checks.
-                if update_fields.get("latitude") is not None and update_fields.get("longitude") is not None:
-                    update_fields["position_updated"] = now
+
+                # A replayed sample can arrive after fresher live data for the
+                # same aircraft. Its field values are still real observations
+                # worth keeping, but its clocks are in the past: advancing
+                # last_seen/position_updated backwards would make a live
+                # aircraft look stale, and feeding a negative dt into the
+                # inferred-field derivation would produce nonsense turn rates.
+                stale_sample = observed_at is not None and ac.last_seen is not None and ac.last_seen > now
+                if not stale_sample:
+                    update_fields["last_seen"] = now
+                    # Position clock: advances ONLY with an actual position decode.
+                    # last_seen advances on every message (velocity/squawk/altitude),
+                    # which makes it useless for downstream position-rate checks.
+                    if update_fields.get("latitude") is not None and update_fields.get("longitude") is not None:
+                        update_fields["position_updated"] = now
 
                 # Clamp negative altitudes for aircraft known to be on the ground.
                 # DF4/16/20 surveillance replies carry only altitude (no on_ground flag),
@@ -205,7 +227,11 @@ class AircraftStore:
                     if update_fields.get("alt_geom") is not None and update_fields["alt_geom"] < 0:
                         update_fields["alt_geom"] = 0
 
-                if preprocessed:
+                if stale_sample:
+                    # Derivations assume monotonic time; skip them rather than
+                    # corrupt _prev_state with an out-of-order sample.
+                    inferred = {}
+                elif preprocessed:
                     inferred = self._compute_inferred_preprocessed(
                         icao, ac, update_fields, now_ts
                     )
@@ -255,10 +281,10 @@ class AircraftStore:
                 }
 
             self._messages_total += 1
-            self._message_timestamps.append(now_ts)
+            self._message_timestamps.append(arrival_ts)
             if has_position:
                 self._positions_total += 1
-                self._position_timestamps.append(now_ts)
+                self._position_timestamps.append(arrival_ts)
 
             # Invalidate stats cache
             self._stats_cache = None

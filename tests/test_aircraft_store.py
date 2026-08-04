@@ -216,3 +216,66 @@ async def test_remove_collector_source_refreshes_materialized_fields(store):
     assert ac.source_collectors == ["c2"]
     assert ac.nearest_collector_nm is not None
     assert ac.nearest_collector_nm > 0.0
+
+
+# ---------------------------------------------------------------------------
+# observed_at — replayed (spooled) traffic from a collector that was offline
+# ---------------------------------------------------------------------------
+
+
+async def test_observed_at_stamps_state_with_observation_time(store):
+    """A replayed message is stamped with when the collector saw it. Without
+    this, a spooled backlog would look like a burst of brand-new traffic."""
+    import time as _time
+
+    observed = _time.time() - 900  # 15 minutes ago
+    await store.update({"icao": "ABC123", "altitude": 10000}, observed_at=observed)
+    ac = await store.get_by_icao("ABC123")
+    assert ac.last_seen.timestamp() == pytest.approx(observed, abs=1.0)
+    assert ac.first_seen.timestamp() == pytest.approx(observed, abs=1.0)
+
+
+async def test_stale_replayed_sample_does_not_rewind_the_clocks(store):
+    """Ordering guard: a late replayed sample still contributes its field
+    values, but must not drag last_seen backwards and make a live aircraft
+    look stale (nor feed a negative dt into the inferred-field derivation)."""
+    import time as _time
+
+    fresh = _time.time()
+    await store.update({"icao": "ABC123", "altitude": 35000}, observed_at=fresh)
+    before = await store.get_by_icao("ABC123")
+
+    # Now a straggler from ten minutes earlier turns up.
+    await store.update({"icao": "ABC123", "callsign": "UAL999"}, observed_at=fresh - 600)
+    after = await store.get_by_icao("ABC123")
+
+    assert after.last_seen == before.last_seen, "stale sample rewound last_seen"
+    assert after.callsign == "UAL999", "stale sample's data was discarded"
+    assert after.message_count == 2
+
+
+async def test_stale_sample_does_not_rewind_position_updated(store):
+    import time as _time
+
+    fresh = _time.time()
+    await store.update(
+        {"icao": "ABC123", "latitude": 40.0, "longitude": -75.0}, observed_at=fresh
+    )
+    before = await store.get_by_icao("ABC123")
+    await store.update(
+        {"icao": "ABC123", "latitude": 41.0, "longitude": -75.0}, observed_at=fresh - 600
+    )
+    after = await store.get_by_icao("ABC123")
+    assert after.position_updated == before.position_updated
+
+
+async def test_ingest_rate_window_uses_arrival_not_observation_time(store):
+    """Rate metrics describe ingest, so replaying an old backlog must still
+    register as current throughput rather than being pruned as ancient."""
+    import time as _time
+
+    old = _time.time() - 3600
+    for i in range(5):
+        await store.update({"icao": f"ABC12{i}", "altitude": 1000}, observed_at=old)
+    stats = store.get_stats()
+    assert stats["messages_per_second"] > 0, "replayed messages vanished from rate window"
