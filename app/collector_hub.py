@@ -44,7 +44,22 @@ logger = logging.getLogger(__name__)
 # can see 50-200× more due to multipath / duplicate SDR outputs.
 # Cap per-ICAO store updates to prevent one loud aircraft from saturating the
 # async event loop (the decoded data is largely redundant past this rate).
-MAX_UPDATES_PER_ICAO_PER_SEC = 25
+#
+# Raised 25 -> 50 after measuring a live feed (239 frames/s, 644 ICAOs) and
+# replaying it through this limiter. Distinct messages cluster inside the
+# window even when an aircraft's per-second total is modest, so 25/s was
+# discarding frames that carried new information - not just duplicate
+# receptions the store would have overwritten identically:
+#
+#   cap   stored  dropped_dup  dropped_DISTINCT  information lost
+#    25     5266         1194               721            10.04%
+#    50     6257          593               331             4.61%
+#   100     6257          593               331             4.61%
+#
+# The curve is flat above 50, so a higher cap only spends CPU re-storing
+# duplicates. Cost of the change is store-side only: WebSocket fan-out is
+# throttled independently by BROADCAST_MIN_INTERVAL in aircraft_store.
+MAX_UPDATES_PER_ICAO_PER_SEC = 50
 
 # Highest feed protocol this hub understands; advertised in the hello ack.
 FEED_PROTO = 2
