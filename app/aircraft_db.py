@@ -10,12 +10,17 @@ from typing import Any
 
 import httpx
 
+from app.aircraft_index import AircraftIndex, iter_snapshot
+
 logger = logging.getLogger(__name__)
 
 # Data directory is at server/data/ (sibling of server/app/)
 DB_DIR = Path(os.path.dirname(os.path.dirname(__file__))) / "data"
 DB_FILE = DB_DIR / "basic-ac-db.json.gz"
 META_FILE = DB_DIR / "db_meta.json"
+# SQLite point-lookup index derived from DB_FILE. Regenerated whenever the
+# snapshot changes; safe to delete (it is a cache).
+INDEX_FILE = DB_DIR / "aircraft_index.sqlite"
 DB_URL = "https://downloads.adsbexchange.com/downloads/basic-ac-db.json.gz"
 HEXDB_API = "https://hexdb.io/api/v1/aircraft"
 
@@ -33,7 +38,10 @@ class AircraftDB:
     with an online hexdb.io API fallback for cache misses."""
 
     def __init__(self):
+        # Populated only when the SQLite index is unavailable - see
+        # aircraft_index.py for why the dict is no longer the primary store.
         self._db: dict[str, dict[str, Any]] = {}
+        self._index: AircraftIndex | None = None
         self._api_cache: dict[str, dict[str, Any] | None] = {}
         self._loaded = False
         self._meta: dict[str, Any] = {}
@@ -83,10 +91,16 @@ class AircraftDB:
         Returns a dict with normalized field names, or None if unknown."""
         icao_upper = icao.upper()
 
-        # Tier 1: local database
-        entry = self._db.get(icao_upper)
-        if entry is not None:
-            return self._normalize_local(entry)
+        # Tier 1: local database. The SQLite index already stores normalized
+        # fields; the dict fallback still holds raw snapshot entries.
+        if self._index is not None:
+            hit = self._index.lookup(icao_upper)
+            if hit is not None:
+                return hit
+        else:
+            entry = self._db.get(icao_upper)
+            if entry is not None:
+                return self._normalize_local(entry)
 
         # Tier 2: in-memory API cache (includes negative results)
         if icao_upper in self._api_cache:
@@ -114,31 +128,47 @@ class AircraftDB:
                 "status": "cooldown",
                 "message": "Manual refresh was requested too recently",
                 "retry_after_seconds": round(MANUAL_REFRESH_COOLDOWN_SECONDS - elapsed, 1),
-                "aircraft_count": len(self._db),
+                "aircraft_count": self.entry_count,
                 "downloaded_at": self._meta.get("downloaded_at"),
             }
 
         self._last_manual_refresh = now
         previous_age = self._age_days()
         await self._download()
-        self._load_from_disk()
+        # Rebuilding streams ~616k rows; keep it off the event loop so the feed
+        # and websocket clients are not stalled by a manual refresh.
+        await asyncio.to_thread(self._load_from_disk)
         return {
             "status": "updated",
-            "aircraft_count": len(self._db),
+            "aircraft_count": self.entry_count,
             "downloaded_at": self._meta.get("downloaded_at"),
             "previous_age_days": round(previous_age, 1) if previous_age is not None else None,
         }
 
     def has_icao(self, icao: str) -> bool:
-        """Check if an ICAO hex code exists in the local database."""
-        return icao.upper() in self._db
+        """Check if an ICAO hex code exists in the local database.
+
+        Called once per received message by the decoder, so it must stay cheap:
+        an indexed SQLite point lookup is microseconds.
+        """
+        icao_upper = icao.upper()
+        if self._index is not None:
+            return self._index.has(icao_upper)
+        return icao_upper in self._db
+
+    @property
+    def entry_count(self) -> int:
+        """Number of locally indexed aircraft, whichever backend is in use."""
+        if self._index is not None:
+            return self._index.count
+        return len(self._db)
 
     def get_status(self) -> dict[str, Any]:
         """Return current database status for the /api/db/status endpoint."""
         age = self._age_days()
         return {
             "loaded": self._loaded,
-            "aircraft_count": len(self._db),
+            "aircraft_count": self.entry_count,
             "downloaded_at": self._meta.get("downloaded_at"),
             "age_days": round(age, 1) if age is not None else None,
             "is_stale": self._is_stale(),
@@ -200,11 +230,51 @@ class AircraftDB:
     # Internals — load
     # ------------------------------------------------------------------
 
+    def _try_build_index(self) -> bool:
+        """Build/reuse the SQLite index. Returns False to fall back to the dict.
+
+        Blocking (a full rebuild streams ~616k rows), so async callers run this
+        via asyncio.to_thread.
+        """
+        try:
+            index = self._index or AircraftIndex(INDEX_FILE)
+            if not index.is_current_for(DB_FILE):
+                index.rebuild(iter_snapshot(DB_FILE, self._normalize_local), DB_FILE)
+            if index.count == 0:
+                logger.warning("Aircraft index built empty; falling back to in-memory dict")
+                return False
+            self._index = index
+            # Free the dict if a previous run had fallen back to it.
+            self._db = {}
+            return True
+        except Exception:
+            logger.exception("Aircraft index unavailable; falling back to in-memory dict")
+            self._index = None
+            return False
+
     def _load_from_disk(self):
-        """Load the gzipped database into the in-memory dict."""
+        """Make the snapshot queryable.
+
+        Prefers the SQLite index (see aircraft_index.py); only decompresses and
+        parses the whole snapshot into RAM if the index cannot be built.
+        """
         if not DB_FILE.exists():
             logger.warning("Aircraft database file not found at %s", DB_FILE)
             self._loaded = False
+            return
+
+        if self._try_build_index():
+            self._loaded = True
+            if META_FILE.exists():
+                try:
+                    self._meta = json.loads(META_FILE.read_text())
+                except Exception:
+                    self._meta = {}
+            if self._meta:
+                self._meta["aircraft_count"] = self.entry_count
+            logger.info(
+                "Aircraft database ready via SQLite index: %d entries", self.entry_count
+            )
             return
 
         try:
@@ -250,7 +320,7 @@ class AircraftDB:
                     self._meta = {}
 
             if self._meta:
-                self._meta["aircraft_count"] = len(db)
+                self._meta["aircraft_count"] = self.entry_count
 
             logger.info("Aircraft database loaded: %d entries", len(self._db))
         except Exception:
@@ -349,7 +419,7 @@ class AircraftDB:
         """Download a new database copy and hot-reload it into memory."""
         try:
             await self._download()
-            self._load_from_disk()
+            await asyncio.to_thread(self._load_from_disk)
         except Exception:
             logger.exception("Background database refresh failed")
 
